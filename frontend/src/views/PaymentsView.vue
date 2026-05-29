@@ -60,7 +60,7 @@ function exportCsv() {
 
 <template>
   <div class="space-y-4">
-    <PageHeader eyebrow="Ledger" title="Money">
+    <PageHeader eyebrow="Crew dues & fees" title="Money">
       <template #action>
         <RouterLink to="/payments/new" :class="btnClasses('primary', 'sm')"><Plus class="h-4 w-4" /> Log</RouterLink>
       </template>
@@ -77,7 +77,7 @@ function exportCsv() {
     </div>
 
     <div class="grid grid-cols-2 gap-3">
-      <StatTile label="Collected" :value="money(revenue)" sub="cash this month" accent />
+      <StatTile label="Collected" :value="money(revenue)" sub="fees this month" accent />
       <StatTile label="Subscriptions" :value="`${paidCount}/${subs.length}`" :sub="subs.length - paidCount > 0 ? `${subs.length - paidCount} unpaid` : 'all paid'" />
     </div>
 

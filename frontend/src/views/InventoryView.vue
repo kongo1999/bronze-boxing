@@ -2,6 +2,7 @@
 import { ref, reactive } from "vue";
 import { Plus, Package } from "lucide-vue-next";
 import { api } from "@/lib/api";
+import { readCache, writeCache } from "@/lib/cache";
 import type { InventoryItem, Trainee, Sale } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -20,15 +21,32 @@ const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 t
 
 // Per-item sell controls
 const sellFor = ref<string | null>(null);
-const sell = reactive({ qty: 1, trainee: "", recordIncome: true });
+const sell = reactive({ qty: 1, trainee: "" });
 
+const CACHE_KEY = "inventory:all";
+type InvBundle = { items: InventoryItem[]; trainees: Trainee[]; sales: Sale[] };
+
+// Cache-first: paint instantly from cache on revisit, then revalidate.
+function showCached() {
+  const hit = readCache<InvBundle>(CACHE_KEY);
+  if (hit) {
+    items.value = hit.items;
+    trainees.value = hit.trainees;
+    sales.value = hit.sales;
+  }
+}
 async function load() {
-  [items.value, trainees.value, sales.value] = await Promise.all([
+  const [i, t, s] = await Promise.all([
     api.get<InventoryItem[]>("/inventory"),
     api.get<Trainee[]>("/trainees"),
     api.get<Sale[]>("/sales"),
   ]);
+  items.value = i;
+  trainees.value = t;
+  sales.value = s;
+  writeCache(CACHE_KEY, { items: i, trainees: t, sales: s });
 }
+showCached();
 load();
 
 async function addItem() {
@@ -45,7 +63,7 @@ async function addItem() {
 }
 function openSell(id: string) {
   sellFor.value = id;
-  Object.assign(sell, { qty: 1, trainee: "", recordIncome: true });
+  Object.assign(sell, { qty: 1, trainee: "" });
 }
 async function confirmSell(item: InventoryItem) {
   if (busy.value) return; // prevent double-sell on rapid clicks
@@ -54,7 +72,6 @@ async function confirmSell(item: InventoryItem) {
     await api.post(`/inventory/${item.id}/sell`, {
       qty: sell.qty,
       trainee: sell.trainee || undefined,
-      recordIncome: sell.recordIncome,
     });
     sellFor.value = null;
     await load();
@@ -106,7 +123,7 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
               </select>
             </label>
           </div>
-          <label class="flex items-center gap-2 text-sm"><input v-model="sell.recordIncome" type="checkbox" class="h-4 w-4 accent-[oklch(0.72_0.13_64)]" /> Record as income</label>
+          <p class="text-xs text-faint">Recorded as shop income (shows in Financials).</p>
           <div class="flex gap-2">
             <Button size="sm" :disabled="busy" @click="confirmSell(i)">Confirm — {{ money(i.price * sell.qty) }}</Button>
             <Button size="sm" variant="ghost" @click="sellFor = null">Cancel</Button>

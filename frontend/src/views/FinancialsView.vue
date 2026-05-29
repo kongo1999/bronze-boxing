@@ -68,7 +68,7 @@ const catLabel: Record<string, string> = {
 
 <template>
   <div class="space-y-4">
-    <PageHeader eyebrow="Books" title="Financials" />
+    <PageHeader eyebrow="Whole business · income & expenses" title="Financials" />
 
     <div class="flex items-center justify-between rounded-2xl border border-line bg-surface p-2">
       <button :class="btnGhost" aria-label="Previous" @click="month = shiftMonth(month, -1)"><ChevronLeft class="h-5 w-5" /></button>
@@ -78,7 +78,7 @@ const catLabel: Record<string, string> = {
 
     <template v-if="fin">
       <div class="grid grid-cols-2 gap-3">
-        <StatTile label="Income" :value="money(fin.income)" sub="money in" accent />
+        <StatTile label="Income" :value="money(fin.income)" sub="fees + shop sales" accent />
         <StatTile label="Outgoings" :value="money(fin.outgoings)" sub="money out" />
       </div>
       <Card class="flex items-center justify-between p-4">

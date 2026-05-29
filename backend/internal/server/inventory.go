@@ -129,14 +129,14 @@ func (h *inventoryHandler) remove(c *fiber.Ctx) error {
 }
 
 type sellInput struct {
-	Qty          int      `json:"qty"`
-	Trainee      string   `json:"trainee"`
-	RecordIncome bool     `json:"recordIncome"`
-	UnitPrice    *float64 `json:"unitPrice"`
+	Qty       int      `json:"qty"`
+	Trainee   string   `json:"trainee"`
+	UnitPrice *float64 `json:"unitPrice"`
 }
 
-// sell records a sale: decrements stock, logs who bought what, and optionally
-// records the sale as cash income (a payment of type "sale").
+// sell records a sale: decrements stock and logs who bought what. The sale is
+// shop income — it counts toward Financials (via the sales collection), but is
+// NOT a "Money"/crew payment, so it stays out of the dues ledger.
 func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -198,25 +198,6 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 		return err
 	}
 	sale.ID = res.InsertedID.(primitive.ObjectID)
-
-	if in.RecordIncome {
-		pay := models.Payment{
-			Trainee:     sale.Trainee,
-			TraineeName: sale.TraineeName,
-			Amount:      sale.Total,
-			Type:        models.PaySale,
-			Date:        now,
-			Note:        sale.ItemName,
-			SaleID:      &sale.ID,
-			CreatedAt:   now,
-		}
-		if pres, err := h.store.Coll(models.CollPayments).InsertOne(ctx, pay); err == nil {
-			pid := pres.InsertedID.(primitive.ObjectID)
-			sale.PaymentID = &pid
-			_, _ = h.store.Coll(models.CollSales).UpdateOne(ctx, bson.M{"_id": sale.ID},
-				bson.M{"$set": bson.M{"paymentId": pid}})
-		}
-	}
 	return c.Status(fiber.StatusCreated).JSON(sale)
 }
 

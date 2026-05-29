@@ -112,11 +112,28 @@ func (h *expenseHandler) financials(c *fiber.Ctx) error {
 		return err
 	}
 
+	// Inventory sales are shop income too. Count them from the sales collection
+	// (skip any legacy sale already mirrored as a payment to avoid double-count).
+	scur, err := h.store.Coll(models.CollSales).Find(ctx, bson.M{"date": bson.M{"$gte": from, "$lt": to}})
+	if err != nil {
+		return err
+	}
+	var sales []models.Sale
+	if err := scur.All(ctx, &sales); err != nil {
+		return err
+	}
+
 	var income, outgoings float64
 	byType := map[string]float64{}
 	for _, p := range payments {
 		income += p.Amount
 		byType[p.Type] += p.Amount
+	}
+	for _, s := range sales {
+		if s.PaymentID == nil {
+			income += s.Total
+			byType["sale"] += s.Total
+		}
 	}
 	byCategory := map[string]float64{}
 	for _, e := range expenses {
