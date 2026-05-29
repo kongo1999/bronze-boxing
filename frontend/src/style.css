@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* ── Ringside design system ───────────────────────────────────────────────
+   Dark, warm, premium. OKLCH throughout; neutrals tinted warm (hue ~68).
+   Ported from the original Next.js build. */
+@theme {
+  --color-canvas: oklch(0.165 0.006 68);
+  --color-surface: oklch(0.205 0.008 68);
+  --color-elevated: oklch(0.255 0.009 68);
+  --color-line: oklch(0.305 0.01 68);
+
+  --color-fg: oklch(0.965 0.006 80);
+  --color-muted: oklch(0.73 0.01 75);
+  --color-faint: oklch(0.56 0.01 70);
+
+  --color-bronze: oklch(0.72 0.13 64);
+  --color-bronze-strong: oklch(0.785 0.14 66);
+  --color-bronze-ink: oklch(0.19 0.02 64);
+
+  --color-paid: oklch(0.73 0.14 162);
+  --color-overdue: oklch(0.645 0.18 26);
+  --color-partial: oklch(0.8 0.15 85);
+  --color-info: oklch(0.7 0.095 240);
+
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
+
+  --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.4), 0 8px 24px -16px oklch(0 0 0 / 0.7);
+  --shadow-lift: 0 2px 6px oklch(0 0 0 / 0.45), 0 16px 40px -20px oklch(0 0 0 / 0.8);
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Oswald", "Geist", sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: oklch(0.72 0.13 64 / 0.3);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-bronze);
+    outline-offset: 2px;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+}
+
+@layer utilities {
+  .label-eyebrow {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+  }
+  .font-display {
+    font-family: var(--font-display);
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
