@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 const routes = [
-  { path: "/", name: "dashboard", component: () => import("@/views/DashboardView.vue") },
+  { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
 
   { path: "/trainees", name: "trainees", component: () => import("@/views/TraineesView.vue") },
   { path: "/trainees/new", name: "trainee-new", component: () => import("@/views/TraineeFormView.vue") },

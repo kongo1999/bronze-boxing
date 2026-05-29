@@ -102,17 +102,17 @@ const dows = ["M", "T", "W", "T", "F", "S", "S"];
           class="relative aspect-square rounded-lg text-sm transition-colors"
           :class="[
             cell.inMonth ? 'text-fg' : 'text-faint/40',
-            sameDay(cell.date, selected) ? 'bg-bronze text-bronze-ink font-semibold' : 'hover:bg-elevated',
+            sameDay(cell.date, selected) ? 'bg-purple text-purple-ink font-semibold' : 'hover:bg-elevated',
           ]"
           @click="selected = cell.date"
         >
-          <span :class="sameDay(cell.date, today) && !sameDay(cell.date, selected) ? 'text-bronze font-semibold' : ''">
+          <span :class="sameDay(cell.date, today) && !sameDay(cell.date, selected) ? 'text-purple-strong font-semibold' : ''">
             {{ cell.date.getDate() }}
           </span>
           <span
             v-if="cell.count > 0"
             class="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full"
-            :class="sameDay(cell.date, selected) ? 'bg-bronze-ink' : 'bg-bronze'"
+            :class="sameDay(cell.date, selected) ? 'bg-purple-ink' : 'bg-bronze'"
           />
         </button>
       </div>

@@ -4,29 +4,42 @@
    Dark, warm, premium. OKLCH throughout; neutrals tinted warm (hue ~68).
    Ported from the original Next.js build. */
 @theme {
-  --color-canvas: oklch(0.165 0.006 68);
-  --color-surface: oklch(0.205 0.008 68);
-  --color-elevated: oklch(0.255 0.009 68);
-  --color-line: oklch(0.305 0.01 68);
+  /* Neutrals — velvet charcoal, tinted toward royal purple (hue ~305). */
+  --color-canvas: oklch(0.155 0.022 305);
+  --color-surface: oklch(0.205 0.03 305);
+  --color-elevated: oklch(0.255 0.038 305);
+  --color-line: oklch(0.32 0.04 305);
 
-  --color-fg: oklch(0.965 0.006 80);
-  --color-muted: oklch(0.73 0.01 75);
-  --color-faint: oklch(0.56 0.01 70);
+  --color-fg: oklch(0.965 0.008 320);
+  --color-muted: oklch(0.73 0.022 312);
+  --color-faint: oklch(0.56 0.028 308);
 
-  --color-bronze: oklch(0.72 0.13 64);
-  --color-bronze-strong: oklch(0.785 0.14 66);
-  --color-bronze-ink: oklch(0.19 0.02 64);
+  /* Brand — royal velvet purple: identity, active nav, selected states. */
+  --color-purple: oklch(0.56 0.15 305);
+  --color-purple-strong: oklch(0.64 0.17 305);
+  --color-purple-ink: oklch(0.97 0.01 320);
 
-  --color-paid: oklch(0.73 0.14 162);
+  /* Accent — bronze with a copper undertone (hue ~56, not gold/mustard):
+     CTAs, key figures, metallic highlights. */
+  --color-bronze: oklch(0.63 0.1 63);
+  --color-bronze-strong: oklch(0.71 0.11 64);
+  --color-bronze-ink: oklch(0.2 0.03 60);
+
+  /* Status (semantic, harmonized to the velvet base). */
+  --color-paid: oklch(0.74 0.14 162);
   --color-overdue: oklch(0.645 0.18 26);
   --color-partial: oklch(0.8 0.15 85);
-  --color-info: oklch(0.7 0.095 240);
+  --color-info: oklch(0.7 0.11 285);
 
   --radius-xl: 0.875rem;
   --radius-2xl: 1.125rem;
 
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.4), 0 8px 24px -16px oklch(0 0 0 / 0.7);
   --shadow-lift: 0 2px 6px oklch(0 0 0 / 0.45), 0 16px 40px -20px oklch(0 0 0 / 0.8);
+
+  /* Button depth: top inset highlight (bevel) + drop shadow; bigger on hover. */
+  --shadow-btn: 0 1px 0 oklch(1 0 0 / 0.1) inset, 0 1px 2px oklch(0 0 0 / 0.5), 0 3px 8px -3px oklch(0 0 0 / 0.55);
+  --shadow-btn-hover: 0 1px 0 oklch(1 0 0 / 0.16) inset, 0 9px 22px -6px oklch(0 0 0 / 0.7);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 
@@ -39,14 +52,19 @@
     -webkit-tap-highlight-color: transparent;
   }
   body {
-    background: var(--color-canvas);
+    /* Velvet glow: a soft royal-purple light from the top, melting into the
+       deep canvas. Fixed so it stays as a stable ambient backdrop. */
+    background:
+      radial-gradient(115% 70% at 50% 0%, oklch(0.4 0.11 305 / 0.35) 0%, transparent 55%),
+      var(--color-canvas);
+    background-attachment: fixed;
     color: var(--color-fg);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
   ::selection {
-    background: oklch(0.72 0.13 64 / 0.3);
+    background: oklch(0.56 0.15 305 / 0.35);
   }
   :focus-visible {
     outline: 2px solid var(--color-bronze);
