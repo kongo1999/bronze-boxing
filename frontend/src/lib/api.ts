@@ -1,8 +1,14 @@
 // Tiny typed fetch client. Dev server proxies /api -> Go server (:8080).
 
+import { isDemo, demoResolve } from "./demo";
+
 const BASE = "/api";
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  // Demo mode (e.g. Vercel preview with no backend): serve canned data.
+  if (isDemo) {
+    return demoResolve<T>(path, (opts.method ?? "GET").toUpperCase(), opts.body ?? null);
+  }
   const res = await fetch(BASE + path, {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
     ...opts,

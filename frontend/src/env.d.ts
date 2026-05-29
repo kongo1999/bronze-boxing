@@ -8,6 +8,7 @@ declare module "*.vue" {
 
 interface ImportMetaEnv {
   readonly VITE_CURRENCY?: string;
+  readonly VITE_DEMO?: string;
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;
