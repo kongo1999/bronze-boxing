@@ -4,28 +4,27 @@
    Dark, warm, premium. OKLCH throughout; neutrals tinted warm (hue ~68).
    Ported from the original Next.js build. */
 @theme {
-  /* Neutrals — velvet charcoal, tinted toward royal purple (hue ~305). */
-  --color-canvas: oklch(0.155 0.022 305);
-  --color-surface: oklch(0.205 0.03 305);
-  --color-elevated: oklch(0.255 0.038 305);
-  --color-line: oklch(0.32 0.04 305);
+  /* PRIMARY — carbon black: near-neutral dark with a faint cool tint (hue ~285). */
+  --color-canvas: oklch(0.14 0.006 285);
+  --color-surface: oklch(0.185 0.008 285);
+  --color-elevated: oklch(0.235 0.009 285);
+  --color-line: oklch(0.3 0.01 285);
 
-  --color-fg: oklch(0.965 0.008 320);
-  --color-muted: oklch(0.73 0.022 312);
-  --color-faint: oklch(0.56 0.028 308);
+  --color-fg: oklch(0.96 0.004 285);
+  --color-muted: oklch(0.72 0.008 285);
+  --color-faint: oklch(0.55 0.01 285);
 
-  /* Brand — royal velvet purple: identity, active nav, selected states. */
-  --color-purple: oklch(0.56 0.15 305);
-  --color-purple-strong: oklch(0.64 0.17 305);
-  --color-purple-ink: oklch(0.97 0.01 320);
+  /* TERTIARY — purple: buttons (CTAs / FAB) and logo marks only. */
+  --color-purple: oklch(0.56 0.17 305);
+  --color-purple-strong: oklch(0.64 0.19 305);
+  --color-purple-ink: oklch(0.98 0.01 305);
 
-  /* Accent — bronze with a copper undertone (hue ~56, not gold/mustard):
-     CTAs, key figures, metallic highlights. */
+  /* SECONDARY — bronze (copper undertone): accents, active nav, selected states, key figures. */
   --color-bronze: oklch(0.63 0.1 63);
   --color-bronze-strong: oklch(0.71 0.11 64);
   --color-bronze-ink: oklch(0.2 0.03 60);
 
-  /* Status (semantic, harmonized to the velvet base). */
+  /* Status (semantic). */
   --color-paid: oklch(0.74 0.14 162);
   --color-overdue: oklch(0.645 0.18 26);
   --color-partial: oklch(0.8 0.15 85);
@@ -55,7 +54,7 @@
     /* Velvet glow: a soft royal-purple light from the top, melting into the
        deep canvas. Fixed so it stays as a stable ambient backdrop. */
     background:
-      radial-gradient(115% 70% at 50% 0%, oklch(0.4 0.11 305 / 0.35) 0%, transparent 55%),
+      radial-gradient(120% 60% at 50% 0%, oklch(0.42 0.14 305 / 0.14) 0%, transparent 55%),
       var(--color-canvas);
     background-attachment: fixed;
     color: var(--color-fg);
@@ -64,7 +63,7 @@
     text-rendering: optimizeLegibility;
   }
   ::selection {
-    background: oklch(0.56 0.15 305 / 0.35);
+    background: oklch(0.63 0.1 63 / 0.32);
   }
   :focus-visible {
     outline: 2px solid var(--color-bronze);

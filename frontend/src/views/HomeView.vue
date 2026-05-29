@@ -41,7 +41,7 @@ const dateLabel = computed(() =>
   <div class="space-y-6">
     <header class="pt-2 text-center">
       <div
-        class="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-2xl border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze text-bronze-ink shadow-[var(--shadow-btn)]"
+        class="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-2xl border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple text-purple-ink shadow-[var(--shadow-btn)]"
       >
         <span class="font-display text-3xl font-bold">B</span>
       </div>
@@ -56,7 +56,7 @@ const dateLabel = computed(() =>
         :to="item.to"
         class="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-soft)] transition-[transform,box-shadow,border-color] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 hover:border-bronze/40 hover:shadow-[var(--shadow-lift)] active:translate-y-0 active:scale-[0.98]"
       >
-        <span class="grid h-11 w-11 place-items-center rounded-xl bg-purple/15 text-purple-strong">
+        <span class="grid h-11 w-11 place-items-center rounded-xl bg-bronze/15 text-bronze">
           <component :is="item.icon" class="h-6 w-6" :stroke-width="1.75" />
         </span>
         <div>

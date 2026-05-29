@@ -17,11 +17,11 @@ export function btnClasses(variant: BtnVariant = "primary", size: BtnSize = "md"
     icon: "h-10 w-10",
   };
   const variants: Record<BtnVariant, string> = {
-    // Metallic: vertical gradient (lighter top → base) reads as a lit bronze face.
+    // Tertiary purple: vertical gradient (lighter top → base) reads as a lit face.
     primary:
-      "border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze text-bronze-ink hover:from-bronze hover:to-bronze-strong",
+      "border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple text-purple-ink hover:from-purple hover:to-purple-strong",
     ghost:
-      "border border-line bg-elevated/50 text-fg hover:border-bronze/40 hover:bg-elevated hover:text-bronze",
+      "border border-line bg-elevated/50 text-fg hover:border-purple/40 hover:bg-elevated hover:text-purple",
     danger:
       "border border-overdue/40 bg-overdue/10 text-overdue hover:bg-overdue/20",
   };

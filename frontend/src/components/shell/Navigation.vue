@@ -82,7 +82,7 @@ const rightTabs = computed(() => tabs.slice(2));
     </button>
     <RouterLink to="/" class="flex items-center gap-2">
       <span
-        class="grid h-7 w-7 place-items-center rounded-lg border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze font-display text-sm font-bold text-bronze-ink"
+        class="grid h-7 w-7 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-sm font-bold text-purple-ink"
         >B</span
       >
       <span class="font-display text-base font-semibold tracking-tight">Bronze Boxing</span>
@@ -102,7 +102,7 @@ const rightTabs = computed(() => tabs.slice(2));
   >
     <RouterLink to="/" class="mb-8 flex items-center gap-2 px-2">
       <span
-        class="grid h-8 w-8 place-items-center rounded-lg bg-bronze font-display text-base font-bold text-bronze-ink"
+        class="grid h-8 w-8 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-base font-bold text-purple-ink"
         >B</span
       >
       <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
@@ -115,7 +115,7 @@ const rightTabs = computed(() => tabs.slice(2));
         class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
         :class="
           isActive(item.to)
-            ? 'bg-purple/20 text-purple-strong'
+            ? 'bg-bronze/15 text-bronze'
             : 'text-muted hover:bg-elevated hover:text-fg'
         "
       >
@@ -125,7 +125,7 @@ const rightTabs = computed(() => tabs.slice(2));
     </nav>
     <button
       type="button"
-      class="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze font-medium text-bronze-ink shadow-[var(--shadow-btn)] transition-[transform,box-shadow] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-btn-hover)] active:translate-y-0 active:scale-[0.97]"
+      class="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-medium text-purple-ink shadow-[var(--shadow-btn)] transition-[transform,box-shadow] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-btn-hover)] active:translate-y-0 active:scale-[0.97]"
       @click="addOpen = true"
     >
       <Plus class="h-5 w-5" :stroke-width="2.5" /> Quick add
@@ -145,7 +145,7 @@ const rightTabs = computed(() => tabs.slice(2));
         :key="item.to"
         :to="item.to"
         class="flex flex-col items-center gap-1 py-2.5 text-[0.6875rem] font-medium transition-colors"
-        :class="isActive(item.to) ? 'text-purple-strong' : 'text-faint hover:text-muted'"
+        :class="isActive(item.to) ? 'text-bronze' : 'text-faint hover:text-muted'"
       >
         <component :is="item.icon" class="h-[1.35rem] w-[1.35rem]" :stroke-width="isActive(item.to) ? 2.25 : 1.75" />
         {{ item.label }}
@@ -154,7 +154,7 @@ const rightTabs = computed(() => tabs.slice(2));
         <button
           type="button"
           aria-label="Quick add"
-          class="-mt-6 grid h-14 w-14 place-items-center rounded-full border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze text-bronze-ink shadow-[var(--shadow-lift)] transition-[transform,box-shadow] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95"
+          class="-mt-6 grid h-14 w-14 place-items-center rounded-full border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple text-purple-ink shadow-[var(--shadow-lift)] transition-[transform,box-shadow] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95"
           @click="addOpen = true"
         >
           <Plus class="h-7 w-7" :stroke-width="2.5" />
@@ -165,7 +165,7 @@ const rightTabs = computed(() => tabs.slice(2));
         :key="item.to"
         :to="item.to"
         class="flex flex-col items-center gap-1 py-2.5 text-[0.6875rem] font-medium transition-colors"
-        :class="isActive(item.to) ? 'text-purple-strong' : 'text-faint hover:text-muted'"
+        :class="isActive(item.to) ? 'text-bronze' : 'text-faint hover:text-muted'"
       >
         <component :is="item.icon" class="h-[1.35rem] w-[1.35rem]" :stroke-width="isActive(item.to) ? 2.25 : 1.75" />
         {{ item.label }}
@@ -220,7 +220,7 @@ const rightTabs = computed(() => tabs.slice(2));
       <div class="mb-6 flex items-center justify-between px-1">
         <RouterLink to="/" class="flex items-center gap-2" @click="menuOpen = false">
           <span
-            class="grid h-8 w-8 place-items-center rounded-lg border border-bronze-strong/50 bg-gradient-to-b from-bronze-strong to-bronze font-display text-base font-bold text-bronze-ink"
+            class="grid h-8 w-8 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-base font-bold text-purple-ink"
             >B</span
           >
           <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
@@ -237,7 +237,7 @@ const rightTabs = computed(() => tabs.slice(2));
           class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
           :class="
             isActive(item.to)
-              ? 'bg-purple/20 text-purple-strong'
+              ? 'bg-bronze/15 text-bronze'
               : 'text-muted hover:bg-elevated hover:text-fg'
           "
           @click="menuOpen = false"
@@ -250,7 +250,7 @@ const rightTabs = computed(() => tabs.slice(2));
           class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
           :class="
             isActive('/search')
-              ? 'bg-purple/20 text-purple-strong'
+              ? 'bg-bronze/15 text-bronze'
               : 'text-muted hover:bg-elevated hover:text-fg'
           "
           @click="menuOpen = false"
