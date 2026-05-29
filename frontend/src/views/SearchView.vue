@@ -11,15 +11,19 @@ import Avatar from "@/components/ui/Avatar.vue";
 const q = ref("");
 const results = ref<SearchResults>();
 let timer: ReturnType<typeof setTimeout> | undefined;
+let searchToken = 0;
 
 watch(q, (val) => {
   clearTimeout(timer);
+  searchToken++; // invalidate any in-flight request
   if (!val.trim()) {
     results.value = undefined;
     return;
   }
+  const my = searchToken;
   timer = setTimeout(async () => {
-    results.value = await api.get<SearchResults>(`/search?q=${encodeURIComponent(val)}`);
+    const res = await api.get<SearchResults>(`/search?q=${encodeURIComponent(val)}`);
+    if (my === searchToken) results.value = res; // ignore stale (out-of-order) responses
   }, 250);
 });
 

@@ -14,6 +14,7 @@ const items = ref<InventoryItem[]>([]);
 const trainees = ref<Trainee[]>([]);
 const sales = ref<Sale[]>([]);
 const showAdd = ref(false);
+const busy = ref(false); // guards against double-submit (double-sell / duplicate item)
 const form = reactive({ name: "", price: 0, stock: 0, lowStockThreshold: 3 });
 const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 
@@ -31,20 +32,35 @@ async function load() {
 load();
 
 async function addItem() {
-  if (!form.name.trim() || form.price <= 0) return;
-  await api.post("/inventory", form);
-  Object.assign(form, { name: "", price: 0, stock: 0, lowStockThreshold: 3 });
-  showAdd.value = false;
-  load();
+  if (busy.value || !form.name.trim() || form.price <= 0) return;
+  busy.value = true;
+  try {
+    await api.post("/inventory", form);
+    Object.assign(form, { name: "", price: 0, stock: 0, lowStockThreshold: 3 });
+    showAdd.value = false;
+    await load();
+  } finally {
+    busy.value = false;
+  }
 }
 function openSell(id: string) {
   sellFor.value = id;
   Object.assign(sell, { qty: 1, trainee: "", recordIncome: true });
 }
 async function confirmSell(item: InventoryItem) {
-  await api.post(`/inventory/${item.id}/sell`, { qty: sell.qty, trainee: sell.trainee || undefined, recordIncome: sell.recordIncome });
-  sellFor.value = null;
-  load();
+  if (busy.value) return; // prevent double-sell on rapid clicks
+  busy.value = true;
+  try {
+    await api.post(`/inventory/${item.id}/sell`, {
+      qty: sell.qty,
+      trainee: sell.trainee || undefined,
+      recordIncome: sell.recordIncome,
+    });
+    sellFor.value = null;
+    await load();
+  } finally {
+    busy.value = false;
+  }
 }
 const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockThreshold;
 </script>
@@ -64,7 +80,7 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
         <label class="block"><span class="mb-1 block text-xs text-faint">Stock</span><input v-model.number="form.stock" type="number" min="0" :class="inputCls" /></label>
         <label class="block"><span class="mb-1 block text-xs text-faint">Low at</span><input v-model.number="form.lowStockThreshold" type="number" min="0" :class="inputCls" /></label>
       </div>
-      <Button size="sm" @click="addItem">Add item</Button>
+      <Button size="sm" :disabled="busy" @click="addItem">Add item</Button>
     </Card>
 
     <EmptyState v-if="items.length === 0" :icon="Package" title="No items yet" description="Add gloves, wraps, water, merch to track stock and sales." />
@@ -92,7 +108,7 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
           </div>
           <label class="flex items-center gap-2 text-sm"><input v-model="sell.recordIncome" type="checkbox" class="h-4 w-4 accent-[oklch(0.72_0.13_64)]" /> Record as income</label>
           <div class="flex gap-2">
-            <Button size="sm" @click="confirmSell(i)">Confirm — {{ money(i.price * sell.qty) }}</Button>
+            <Button size="sm" :disabled="busy" @click="confirmSell(i)">Confirm — {{ money(i.price * sell.qty) }}</Button>
             <Button size="sm" variant="ghost" @click="sellFor = null">Cancel</Button>
           </div>
         </div>

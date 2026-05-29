@@ -13,14 +13,20 @@ import { btnClasses } from "@/components/ui/button";
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
-const { data: session, loading, reload } = useAsync(() => api.get<Session>(`/sessions/${id}`));
+const { data: session, loading } = useAsync(() => api.get<Session>(`/sessions/${id}`));
 
 const dateLabel = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
+// Optimistic: update the attendee chip immediately, fire one request, revert on failure.
 async function setAttendance(a: Attendee, status: string) {
-  await api.patch(`/sessions/${id}/attendance`, { trainee: a.trainee, status });
-  reload();
+  const prev = a.status;
+  a.status = status as Attendee["status"];
+  try {
+    await api.patch(`/sessions/${id}/attendance`, { trainee: a.trainee, status });
+  } catch {
+    a.status = prev;
+  }
 }
 async function remove() {
   if (!confirm("Delete this session?")) return;

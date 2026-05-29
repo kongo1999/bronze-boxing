@@ -180,10 +180,17 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 		}
 	}
 
-	// Decrement stock.
-	if _, err := h.store.Coll(models.CollInventory).UpdateOne(ctx, bson.M{"_id": item.ID},
-		bson.M{"$inc": bson.M{"stock": -in.Qty}, "$set": bson.M{"updatedAt": now}}); err != nil {
+	// Atomically decrement stock, but only if enough remains. This guards against
+	// concurrent or double-submitted sells overselling between the read above and
+	// this write (the matchedCount==0 case means stock changed underneath us).
+	dec, err := h.store.Coll(models.CollInventory).UpdateOne(ctx,
+		bson.M{"_id": item.ID, "stock": bson.M{"$gte": in.Qty}},
+		bson.M{"$inc": bson.M{"stock": -in.Qty}, "$set": bson.M{"updatedAt": now}})
+	if err != nil {
 		return err
+	}
+	if dec.MatchedCount == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "not enough stock")
 	}
 
 	res, err := h.store.Coll(models.CollSales).InsertOne(ctx, sale)

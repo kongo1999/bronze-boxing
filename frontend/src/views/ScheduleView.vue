@@ -21,13 +21,16 @@ function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+let loadToken = 0;
 async function load() {
+  const my = ++loadToken;
   const y = cursor.value.getFullYear();
   const m = cursor.value.getMonth();
   const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
   const next = new Date(y, m + 1, 1);
   const to = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
-  sessions.value = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
+  const res = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
+  if (my === loadToken) sessions.value = res; // ignore stale (out-of-order) responses
 }
 watch(cursor, load, { immediate: true });
 

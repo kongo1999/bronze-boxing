@@ -16,11 +16,16 @@ const month = ref(monthKey());
 const subs = ref<SubStatus[]>([]);
 const payments = ref<Payment[]>([]);
 
+let loadToken = 0;
 async function load() {
-  [subs.value, payments.value] = await Promise.all([
+  const my = ++loadToken;
+  const [s, p] = await Promise.all([
     api.get<SubStatus[]>(`/subscriptions?m=${month.value}`),
     api.get<Payment[]>(`/payments?m=${month.value}`),
   ]);
+  if (my !== loadToken) return; // ignore stale (out-of-order) responses
+  subs.value = s;
+  payments.value = p;
 }
 watch(month, load, { immediate: true });
 

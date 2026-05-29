@@ -15,26 +15,37 @@ const month = ref(monthKey());
 const fin = ref<Financials>();
 const expenses = ref<Expense[]>([]);
 const showAdd = ref(false);
+const busy = ref(false); // guards against duplicate expense on double-click
 const form = reactive({ amount: 0, category: "rent", note: "" });
 const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 
+let loadToken = 0;
 async function load() {
-  [fin.value, expenses.value] = await Promise.all([
+  const my = ++loadToken;
+  const [f, e] = await Promise.all([
     api.get<Financials>(`/financials?m=${month.value}`),
     api.get<Expense[]>(`/expenses?m=${month.value}`),
   ]);
+  if (my !== loadToken) return; // ignore stale (out-of-order) responses
+  fin.value = f;
+  expenses.value = e;
 }
 watch(month, load, { immediate: true });
 
 const netPositive = computed(() => (fin.value?.net ?? 0) >= 0);
 
 async function addExpense() {
-  if (form.amount <= 0) return;
-  await api.post("/expenses", { amount: form.amount, category: form.category, note: form.note });
-  form.amount = 0;
-  form.note = "";
-  showAdd.value = false;
-  load();
+  if (busy.value || form.amount <= 0) return;
+  busy.value = true;
+  try {
+    await api.post("/expenses", { amount: form.amount, category: form.category, note: form.note });
+    form.amount = 0;
+    form.note = "";
+    showAdd.value = false;
+    await load();
+  } finally {
+    busy.value = false;
+  }
 }
 async function removeExpense(id: string) {
   await api.del(`/expenses/${id}`);
@@ -86,7 +97,7 @@ const catLabel: Record<string, string> = {
             </select>
           </div>
           <input v-model="form.note" placeholder="Note (optional)" :class="inputCls" />
-          <Button size="sm" @click="addExpense">Add expense</Button>
+          <Button size="sm" :disabled="busy" @click="addExpense">Add expense</Button>
         </Card>
 
         <ul class="space-y-2">

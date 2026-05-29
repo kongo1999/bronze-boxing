@@ -11,13 +11,27 @@ import { btnClasses } from "@/components/ui/button";
 
 const { data, loading, reload } = useAsync(() => api.get<Reminder[]>("/reminders"));
 
+// Optimistic: flip the UI immediately, fire one request, revert only on failure.
+// No full-list refetch — that caused request pile-up and out-of-order overwrites.
 async function toggle(r: Reminder) {
-  await api.put(`/reminders/${r.id}`, { done: !r.done });
-  reload();
+  const next = !r.done;
+  r.done = next;
+  try {
+    await api.put(`/reminders/${r.id}`, { done: next });
+  } catch {
+    r.done = !next; // revert
+  }
 }
 async function remove(r: Reminder) {
-  await api.del(`/reminders/${r.id}`);
-  reload();
+  const list = data.value;
+  if (!list) return;
+  const idx = list.indexOf(r);
+  if (idx >= 0) list.splice(idx, 1); // optimistic removal
+  try {
+    await api.del(`/reminders/${r.id}`);
+  } catch {
+    reload(); // restore true state on failure
+  }
 }
 const dotColor = (p: string) => (p === "high" ? "bg-overdue" : p === "normal" ? "bg-bronze" : "bg-faint");
 </script>
