@@ -30,8 +30,8 @@
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Oswald", "Geist", sans-serif;
+  --font-sans: "Geist Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Oswald", "Geist Sans", sans-serif;
 }
 
 @layer base {

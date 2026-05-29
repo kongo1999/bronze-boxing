@@ -2,7 +2,7 @@
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Trash2, MapPin, Clock } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useAsync } from "@/lib/useAsync";
+import { useCachedAsync } from "@/lib/cache";
 import type { Session, Attendee } from "@/lib/types";
 import { formatTime } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
@@ -13,7 +13,7 @@ import { btnClasses } from "@/components/ui/button";
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
-const { data: session, loading } = useAsync(() => api.get<Session>(`/sessions/${id}`));
+const { data: session, loading } = useCachedAsync(`/sessions/${id}`, () => api.get<Session>(`/sessions/${id}`));
 
 const dateLabel = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });

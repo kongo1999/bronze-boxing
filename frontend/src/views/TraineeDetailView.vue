@@ -2,7 +2,7 @@
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Trash2, Phone } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useAsync } from "@/lib/useAsync";
+import { useCachedAsync } from "@/lib/cache";
 import type { Trainee, Payment } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
@@ -14,8 +14,8 @@ const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
 
-const { data: trainee, loading } = useAsync(() => api.get<Trainee>(`/trainees/${id}`));
-const { data: payments } = useAsync(() => api.get<Payment[]>(`/payments?from=2000-01-01&to=2100-01-01`));
+const { data: trainee, loading } = useCachedAsync(`/trainees/${id}`, () => api.get<Trainee>(`/trainees/${id}`));
+const { data: payments } = useCachedAsync("payments:all", () => api.get<Payment[]>(`/payments?from=2000-01-01&to=2100-01-01`));
 
 async function remove() {
   if (!confirm("Delete this trainee?")) return;

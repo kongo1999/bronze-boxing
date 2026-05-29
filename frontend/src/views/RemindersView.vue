@@ -2,14 +2,14 @@
 import { RouterLink } from "vue-router";
 import { Plus, Bell, Check, Trash2 } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useAsync } from "@/lib/useAsync";
+import { useCachedAsync } from "@/lib/cache";
 import type { Reminder } from "@/lib/types";
 import { formatLongDate } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 import { btnClasses } from "@/components/ui/button";
 
-const { data, loading, reload } = useAsync(() => api.get<Reminder[]>("/reminders"));
+const { data, loading, reload } = useCachedAsync("/reminders", () => api.get<Reminder[]>("/reminders"));
 
 // Optimistic: flip the UI immediately, fire one request, revert only on failure.
 // No full-list refetch — that caused request pile-up and out-of-order overwrites.

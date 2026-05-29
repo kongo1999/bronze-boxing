@@ -3,6 +3,7 @@ import { ref, computed, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { ChevronLeft, ChevronRight, Plus, Receipt, Download } from "lucide-vue-next";
 import { api } from "@/lib/api";
+import { readCache, writeCache } from "@/lib/cache";
 import type { Payment, SubStatus } from "@/lib/types";
 import { money, monthKey, monthLabel, shiftMonth, formatLongDate } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -16,6 +17,7 @@ const month = ref(monthKey());
 const subs = ref<SubStatus[]>([]);
 const payments = ref<Payment[]>([]);
 
+const cacheKey = () => `payments:${month.value}`;
 let loadToken = 0;
 async function load() {
   const my = ++loadToken;
@@ -26,8 +28,17 @@ async function load() {
   if (my !== loadToken) return; // ignore stale (out-of-order) responses
   subs.value = s;
   payments.value = p;
+  writeCache(cacheKey(), { subs: s, payments: p });
 }
-watch(month, load, { immediate: true });
+function showCached() {
+  const hit = readCache<{ subs: SubStatus[]; payments: Payment[] }>(cacheKey());
+  if (hit) {
+    subs.value = hit.subs;
+    payments.value = hit.payments;
+  }
+}
+// On month change/nav: render cache instantly, then revalidate.
+watch(month, () => { showCached(); load(); }, { immediate: true });
 
 const revenue = computed(() => payments.value.reduce((s, p) => s + p.amount, 0));
 const paidCount = computed(() => subs.value.filter((s) => s.state === "paid").length);

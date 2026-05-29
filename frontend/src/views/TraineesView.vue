@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ChevronRight, UserPlus, Users } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useAsync } from "@/lib/useAsync";
+import { useCachedAsync } from "@/lib/cache";
 import type { Trainee } from "@/lib/types";
 import { money } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -14,7 +14,7 @@ import Button from "@/components/ui/Button.vue";
 import { btnClasses } from "@/components/ui/button";
 
 const q = ref("");
-const { data, loading } = useAsync(() => api.get<Trainee[]>(`/trainees`));
+const { data, loading } = useCachedAsync("/trainees", () => api.get<Trainee[]>(`/trainees`));
 
 const filtered = computed(() => {
   const list = data.value ?? [];

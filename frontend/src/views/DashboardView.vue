@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ArrowRight, CircleCheck } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useAsync } from "@/lib/useAsync";
+import { useCachedAsync } from "@/lib/cache";
 import type { Dashboard } from "@/lib/types";
 import { money, monthLabel, formatTime } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -13,7 +13,7 @@ import Badge from "@/components/ui/Badge.vue";
 import Avatar from "@/components/ui/Avatar.vue";
 import { btnClasses } from "@/components/ui/button";
 
-const { data, loading, error } = useAsync(() => api.get<Dashboard>("/dashboard"));
+const { data, loading, error } = useCachedAsync("/dashboard", () => api.get<Dashboard>("/dashboard"));
 
 const greeting = computed(() => {
   const h = new Date().getHours();

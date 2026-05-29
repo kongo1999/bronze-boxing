@@ -3,6 +3,7 @@ import { ref, computed, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { ChevronLeft, ChevronRight, CalendarPlus } from "lucide-vue-next";
 import { api } from "@/lib/api";
+import { readCache, writeCache } from "@/lib/cache";
 import type { Session } from "@/lib/types";
 import { formatTime } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -21,6 +22,7 @@ function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+const cacheKey = () => `sessions:${cursor.value.getFullYear()}-${cursor.value.getMonth()}`;
 let loadToken = 0;
 async function load() {
   const my = ++loadToken;
@@ -30,9 +32,15 @@ async function load() {
   const next = new Date(y, m + 1, 1);
   const to = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
   const res = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
-  if (my === loadToken) sessions.value = res; // ignore stale (out-of-order) responses
+  if (my !== loadToken) return; // ignore stale (out-of-order) responses
+  sessions.value = res;
+  writeCache(cacheKey(), res);
 }
-watch(cursor, load, { immediate: true });
+function showCached() {
+  const hit = readCache<Session[]>(cacheKey());
+  if (hit) sessions.value = hit;
+}
+watch(cursor, () => { showCached(); load(); }, { immediate: true });
 
 // Build a Monday-start grid covering the visible month.
 const weeks = computed(() => {

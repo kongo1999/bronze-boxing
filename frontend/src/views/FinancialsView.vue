@@ -2,6 +2,7 @@
 import { ref, reactive, computed, watch } from "vue";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-vue-next";
 import { api } from "@/lib/api";
+import { readCache, writeCache } from "@/lib/cache";
 import type { Financials, Expense } from "@/lib/types";
 import { money, monthKey, monthLabel, shiftMonth } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -19,6 +20,7 @@ const busy = ref(false); // guards against duplicate expense on double-click
 const form = reactive({ amount: 0, category: "rent", note: "" });
 const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 
+const cacheKey = () => `financials:${month.value}`;
 let loadToken = 0;
 async function load() {
   const my = ++loadToken;
@@ -29,8 +31,16 @@ async function load() {
   if (my !== loadToken) return; // ignore stale (out-of-order) responses
   fin.value = f;
   expenses.value = e;
+  writeCache(cacheKey(), { fin: f, expenses: e });
 }
-watch(month, load, { immediate: true });
+function showCached() {
+  const hit = readCache<{ fin: Financials; expenses: Expense[] }>(cacheKey());
+  if (hit) {
+    fin.value = hit.fin;
+    expenses.value = hit.expenses;
+  }
+}
+watch(month, () => { showCached(); load(); }, { immediate: true });
 
 const netPositive = computed(() => (fin.value?.net ?? 0) >= 0);
 
