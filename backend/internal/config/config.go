@@ -10,6 +10,7 @@ type Config struct {
 	Port        string
 	CORSOrigins string
 	Currency    string
+	APIToken    string
 }
 
 func Load() Config {
@@ -19,6 +20,8 @@ func Load() Config {
 		Port:        env("PORT", "8080"),
 		CORSOrigins: env("CORS_ORIGINS", "http://localhost:5173"),
 		Currency:    env("CURRENCY", "$"),
+		// Empty = no auth (local dev). Set in production to require a bearer token.
+		APIToken: env("API_TOKEN", ""),
 	}
 }
 

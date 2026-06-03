@@ -1,0 +1,67 @@
+# Bronze Boxing — full stack for a single droplet.
+#   web (Caddy)  : serves the SPA + reverse-proxies /api, terminates HTTPS
+#   api (Go)     : the Fiber API, internal only
+#   mongo        : database, internal only, data persisted in a named volume
+#
+# Only the web service is exposed to the internet (80/443). The API and Mongo
+# are reachable solely on the private compose network.
+#
+#   cp .env.example .env   # then edit
+#   docker compose up -d --build
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin
+      DB_NAME: ${DB_NAME}
+      PORT: "8080"
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      API_TOKEN: ${API_TOKEN:-}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks: [internal]
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_DEMO: "false"
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+    networks: [internal]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

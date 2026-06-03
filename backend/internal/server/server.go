@@ -24,8 +24,14 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.CORSOrigins,
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders: "Origin,Content-Type,Accept",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 	}))
+
+	// Require a bearer token when configured (production). CORS preflight (OPTIONS)
+	// is already short-circuited above, so this only guards real requests.
+	if cfg.APIToken != "" {
+		app.Use(requireToken(cfg.APIToken))
+	}
 
 	api := app.Group("/api")
 	registerHealth(api, store)
