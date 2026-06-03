@@ -19,6 +19,7 @@ func registerExpenses(r fiber.Router, store *db.Store) {
 	g := r.Group("/expenses")
 	g.Get("/", h.list)
 	g.Post("/", h.create)
+	g.Put("/:id", h.update)
 	g.Delete("/:id", h.remove)
 	r.Get("/financials", h.financials)
 }
@@ -73,6 +74,38 @@ func (h *expenseHandler) create(c *fiber.Ctx) error {
 	}
 	e.ID = res.InsertedID.(primitive.ObjectID)
 	return c.Status(fiber.StatusCreated).JSON(e)
+}
+
+func (h *expenseHandler) update(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var in expenseInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	if in.Amount <= 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
+	}
+	set := bson.M{
+		"amount":   in.Amount,
+		"category": defaultStr(in.Category, models.ExpOther),
+		"note":     in.Note,
+	}
+	if in.Date != nil {
+		set["date"] = *in.Date
+	}
+	if _, err := h.store.Coll(models.CollExpenses).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
+		return err
+	}
+	var e models.Expense
+	if err := h.store.Coll(models.CollExpenses).FindOne(ctx, bson.M{"_id": id}).Decode(&e); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "expense not found")
+	}
+	return c.JSON(e)
 }
 
 func (h *expenseHandler) remove(c *fiber.Ctx) error {

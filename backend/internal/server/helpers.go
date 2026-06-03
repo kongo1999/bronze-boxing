@@ -60,6 +60,21 @@ func defaultStr(v, def string) string {
 	return v
 }
 
+// deref helpers for optional (pointer) JSON fields — nil means "not sent".
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func derefF64(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 // traineeNames batch-resolves trainee display names for a set of ids.
 func traineeNames(ctx context.Context, store *db.Store, ids []primitive.ObjectID) map[primitive.ObjectID]string {
 	out := map[primitive.ObjectID]string{}

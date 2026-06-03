@@ -38,9 +38,9 @@ type sessionInput struct {
 	Type        string          `json:"type"`
 	Start       *time.Time      `json:"start"`
 	DurationMin int             `json:"durationMin"`
-	Location    string          `json:"location"`
+	Location    *string         `json:"location"`
 	Capacity    int             `json:"capacity"`
-	Fee         float64         `json:"fee"`
+	Fee         *float64        `json:"fee"`
 	Status      string          `json:"status"`
 	Attendees   []attendeeInput `json:"attendees"`
 }
@@ -120,15 +120,18 @@ func (h *sessionHandler) create(c *fiber.Ctx) error {
 	if in.Start == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "start is required")
 	}
+	if in.DurationMin < 0 || in.Capacity < 0 || derefF64(in.Fee) < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "duration, capacity and fee must be non-negative")
+	}
 	now := time.Now()
 	s := models.Session{
 		Title:       strings.TrimSpace(in.Title),
 		Type:        defaultStr(in.Type, models.SessionGroup),
 		Start:       *in.Start,
 		DurationMin: in.DurationMin,
-		Location:    in.Location,
+		Location:    derefStr(in.Location),
 		Capacity:    in.Capacity,
-		Fee:         in.Fee,
+		Fee:         derefF64(in.Fee),
 		Status:      defaultStr(in.Status, models.SessScheduled),
 		Attendees:   h.buildAttendees(ctx, in.Attendees),
 		CreatedAt:   now,
@@ -166,11 +169,21 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 	if in.DurationMin > 0 {
 		set["durationMin"] = in.DurationMin
 	}
-	set["location"] = in.Location
+	// Only touch location/fee when the caller actually sent them — otherwise a
+	// partial update (e.g. just changing the time) would blank the location and
+	// zero the fee.
+	if in.Location != nil {
+		set["location"] = *in.Location
+	}
 	if in.Capacity > 0 {
 		set["capacity"] = in.Capacity
 	}
-	set["fee"] = in.Fee
+	if in.Fee != nil {
+		if *in.Fee < 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "fee must be non-negative")
+		}
+		set["fee"] = *in.Fee
+	}
 	if in.Status != "" {
 		set["status"] = in.Status
 	}
@@ -222,30 +235,51 @@ func (h *sessionHandler) attendance(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
 	}
-	var s models.Session
-	if err := h.store.Coll(models.CollSessions).FindOne(ctx, bson.M{"_id": id}).Decode(&s); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "session not found")
+	status := defaultStr(in.Status, models.AttendBooked)
+	if status != models.AttendBooked && status != models.AttendAttended && status != models.AttendNoShow {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid attendance status")
 	}
-	found := false
-	for i := range s.Attendees {
-		if s.Attendees[i].Trainee == tid {
-			s.Attendees[i].Status = defaultStr(in.Status, models.AttendBooked)
-			found = true
-			break
-		}
-	}
-	if !found {
-		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
-		s.Attendees = append(s.Attendees, models.Attendee{
-			Trainee:     tid,
-			TraineeName: names[tid],
-			Status:      defaultStr(in.Status, models.AttendBooked),
-		})
-	}
-	_, err = h.store.Coll(models.CollSessions).UpdateOne(ctx, bson.M{"_id": id},
-		bson.M{"$set": bson.M{"attendees": s.Attendees, "updatedAt": time.Now()}})
+	coll := h.store.Coll(models.CollSessions)
+	now := time.Now()
+
+	// 1) If the attendee already exists, update in place atomically (positional $).
+	res, err := coll.UpdateOne(ctx,
+		bson.M{"_id": id, "attendees.trainee": tid},
+		bson.M{"$set": bson.M{"attendees.$.status": status, "updatedAt": now}})
 	if err != nil {
 		return err
+	}
+	if res.MatchedCount == 0 {
+		// 2) Not present — push a new attendee, but only while still absent. This
+		// avoids the read-modify-write race where two concurrent calls would each
+		// rewrite the whole array and lose one update.
+		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
+		push, err := coll.UpdateOne(ctx,
+			bson.M{"_id": id, "attendees.trainee": bson.M{"$ne": tid}},
+			bson.M{
+				"$push": bson.M{"attendees": models.Attendee{Trainee: tid, TraineeName: names[tid], Status: status}},
+				"$set":  bson.M{"updatedAt": now},
+			})
+		if err != nil {
+			return err
+		}
+		if push.MatchedCount == 0 {
+			// Either the session is gone, or a concurrent call added the attendee
+			// between our two writes. Distinguish, and if it was a race, set status.
+			if cnt, _ := coll.CountDocuments(ctx, bson.M{"_id": id}); cnt == 0 {
+				return fiber.NewError(fiber.StatusNotFound, "session not found")
+			}
+			if _, err := coll.UpdateOne(ctx,
+				bson.M{"_id": id, "attendees.trainee": tid},
+				bson.M{"$set": bson.M{"attendees.$.status": status, "updatedAt": now}}); err != nil {
+				return err
+			}
+		}
+	}
+
+	var s models.Session
+	if err := coll.FindOne(ctx, bson.M{"_id": id}).Decode(&s); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "session not found")
 	}
 	return c.JSON(s)
 }

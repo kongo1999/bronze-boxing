@@ -26,6 +26,7 @@ func registerPayments(r fiber.Router, store *db.Store) {
 	g.Post("/", h.create)
 	g.Get("/export", h.export)
 	g.Get("/:id/receipt", h.receipt)
+	g.Put("/:id", h.update)
 	g.Delete("/:id", h.remove)
 	r.Get("/subscriptions", h.subscriptions)
 }
@@ -76,9 +77,13 @@ func (h *paymentHandler) create(c *fiber.Ctx) error {
 	if in.Amount <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
 	}
+	typ := defaultStr(in.Type, models.PayOther)
+	if err := validatePeriodMonth(typ, in.PeriodMonth); err != nil {
+		return err
+	}
 	p := models.Payment{
 		Amount:      in.Amount,
-		Type:        defaultStr(in.Type, models.PayOther),
+		Type:        typ,
 		PeriodMonth: in.PeriodMonth,
 		Note:        in.Note,
 		Date:        time.Now(),
@@ -102,6 +107,56 @@ func (h *paymentHandler) create(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(p)
 }
 
+func (h *paymentHandler) update(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var in paymentInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	if in.Amount <= 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
+	}
+	typ := defaultStr(in.Type, models.PayOther)
+	if err := validatePeriodMonth(typ, in.PeriodMonth); err != nil {
+		return err
+	}
+	set := bson.M{
+		"amount":      in.Amount,
+		"type":        typ,
+		"periodMonth": in.PeriodMonth,
+		"note":        in.Note,
+	}
+	if in.Date != nil {
+		set["date"] = *in.Date
+	}
+	// Re-resolve the trainee link (and denormalized name), or clear it.
+	if in.Trainee != "" {
+		tid, err := primitive.ObjectIDFromHex(in.Trainee)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
+		}
+		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
+		set["trainee"] = tid
+		set["traineeName"] = names[tid]
+	} else {
+		set["trainee"] = nil
+		set["traineeName"] = ""
+	}
+	if _, err := h.store.Coll(models.CollPayments).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
+		return err
+	}
+	var p models.Payment
+	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payment not found")
+	}
+	return c.JSON(p)
+}
+
 func (h *paymentHandler) remove(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -113,6 +168,17 @@ func (h *paymentHandler) remove(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"ok": true})
+}
+
+// validatePeriodMonth ensures a subscription payment's period is a real YYYY-MM,
+// since the dues matcher keys on an exact string match.
+func validatePeriodMonth(typ, periodMonth string) error {
+	if typ == models.PaySubscription && periodMonth != "" {
+		if _, _, err := models.MonthRange(periodMonth); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "periodMonth must be YYYY-MM")
+		}
+	}
+	return nil
 }
 
 func (h *paymentHandler) receipt(c *fiber.Ctx) error {

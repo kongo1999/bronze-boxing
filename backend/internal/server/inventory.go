@@ -24,6 +24,8 @@ func registerInventory(r fiber.Router, store *db.Store) {
 	g.Delete("/:id", h.remove)
 	g.Post("/:id/sell", h.sell)
 	r.Get("/sales", h.sales)
+	r.Put("/sales/:id", h.correctSale)  // correct qty / buyer (adjusts stock)
+	r.Delete("/sales/:id", h.voidSale)  // void a sale (restocks)
 }
 
 type inventoryInput struct {
@@ -62,6 +64,9 @@ func (h *inventoryHandler) create(c *fiber.Ctx) error {
 	if in.Name == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "name is required")
 	}
+	if in.Price < 0 || in.CostPrice < 0 || in.Stock < 0 || in.LowStockThreshold < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "price, stock and thresholds must be non-negative")
+	}
 	now := time.Now()
 	item := models.InventoryItem{
 		Name:              in.Name,
@@ -92,6 +97,9 @@ func (h *inventoryHandler) update(c *fiber.Ctx) error {
 	var in inventoryInput
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	if in.Price < 0 || in.CostPrice < 0 || in.Stock < 0 || in.LowStockThreshold < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "price, stock and thresholds must be non-negative")
 	}
 	set := bson.M{
 		"name":              strings.TrimSpace(in.Name),
@@ -222,6 +230,97 @@ func (h *inventoryHandler) sales(c *fiber.Ctx) error {
 	out := []models.Sale{}
 	if err := cur.All(ctx, &out); err != nil {
 		return err
+	}
+	return c.JSON(out)
+}
+
+// voidSale reverses a sale: it puts the sold quantity back into stock and
+// deletes the sale record (so it no longer counts as shop income).
+func (h *inventoryHandler) voidSale(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var sale models.Sale
+	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&sale); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "sale not found")
+	}
+	if _, err := h.store.Coll(models.CollInventory).UpdateOne(ctx,
+		bson.M{"_id": sale.Item},
+		bson.M{"$inc": bson.M{"stock": sale.Qty}, "$set": bson.M{"updatedAt": time.Now()}}); err != nil {
+		return err
+	}
+	if _, err := h.store.Coll(models.CollSales).DeleteOne(ctx, bson.M{"_id": id}); err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true, "restocked": sale.Qty})
+}
+
+type saleCorrectionInput struct {
+	Qty     *int    `json:"qty"`
+	Trainee *string `json:"trainee"`
+}
+
+// correctSale fixes a logged sale's quantity and/or buyer, adjusting stock by
+// the delta. Reducing qty returns units to stock; increasing it takes more off
+// the shelf (guarded so it can't drive stock negative).
+func (h *inventoryHandler) correctSale(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var in saleCorrectionInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	var sale models.Sale
+	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&sale); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "sale not found")
+	}
+	set := bson.M{}
+	if in.Qty != nil {
+		if *in.Qty <= 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "qty must be positive")
+		}
+		delta := *in.Qty - sale.Qty // >0 => take more off the shelf
+		if delta != 0 {
+			upd, err := h.store.Coll(models.CollInventory).UpdateOne(ctx,
+				bson.M{"_id": sale.Item, "stock": bson.M{"$gte": max(delta, 0)}},
+				bson.M{"$inc": bson.M{"stock": -delta}, "$set": bson.M{"updatedAt": time.Now()}})
+			if err != nil {
+				return err
+			}
+			if upd.MatchedCount == 0 {
+				return fiber.NewError(fiber.StatusBadRequest, "not enough stock for correction")
+			}
+		}
+		set["qty"] = *in.Qty
+		set["total"] = sale.UnitPrice * float64(*in.Qty)
+	}
+	if in.Trainee != nil {
+		if *in.Trainee == "" {
+			set["trainee"] = nil
+			set["traineeName"] = ""
+		} else if tid, err := primitive.ObjectIDFromHex(*in.Trainee); err == nil {
+			names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
+			set["trainee"] = tid
+			set["traineeName"] = names[tid]
+		} else {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
+		}
+	}
+	if len(set) > 0 {
+		if _, err := h.store.Coll(models.CollSales).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
+			return err
+		}
+	}
+	var out models.Sale
+	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&out); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "sale not found")
 	}
 	return c.JSON(out)
 }
