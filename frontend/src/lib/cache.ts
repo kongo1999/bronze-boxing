@@ -1,4 +1,5 @@
 import { ref, type Ref } from "vue";
+import { toast } from "./toast";
 
 // Module-level cache shared across component mounts → instant revisits.
 // Values are whatever a view stores under a string key (a list, an object, …).
@@ -35,7 +36,15 @@ export function useCachedAsync<T>(key: string, fetcher: () => Promise<T>) {
       writeCache(key, res);
       data.value = res;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : "Something went wrong";
+      const msg = e instanceof Error && e.message ? e.message : "Something went wrong";
+      // If we already have data on screen (cache hit / earlier success), keep it
+      // and flag the failed refresh with a toast. Only block the page with an
+      // inline error when there's nothing to show.
+      if (data.value !== undefined) {
+        toast("Couldn't refresh — showing saved data.", "error");
+      } else {
+        error.value = msg;
+      }
     } finally {
       loading.value = false;
     }

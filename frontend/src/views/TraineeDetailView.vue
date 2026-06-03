@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Trash2, Phone } from "lucide-vue-next";
 import { api } from "@/lib/api";
@@ -8,19 +9,29 @@ import { money, formatLongDate } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Avatar from "@/components/ui/Avatar.vue";
 import Badge from "@/components/ui/Badge.vue";
+import Skeleton from "@/components/ui/Skeleton.vue";
+import Alert from "@/components/ui/Alert.vue";
 import { btnClasses } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
 
-const { data: trainee, loading } = useCachedAsync(`/trainees/${id}`, () => api.get<Trainee>(`/trainees/${id}`));
+const { data: trainee, loading, error } = useCachedAsync(`/trainees/${id}`, () => api.get<Trainee>(`/trainees/${id}`));
 const { data: payments } = useCachedAsync("payments:all", () => api.get<Payment[]>(`/payments?from=2000-01-01&to=2100-01-01`));
 
+const deleting = ref(false);
 async function remove() {
-  if (!confirm("Delete this trainee?")) return;
-  await api.del(`/trainees/${id}`);
-  router.push("/trainees");
+  if (deleting.value || !confirm("Delete this trainee?")) return;
+  deleting.value = true;
+  try {
+    await api.del(`/trainees/${id}`);
+    router.push("/trainees");
+  } catch (e) {
+    deleting.value = false;
+    toast(e instanceof Error && e.message ? e.message : "Couldn't delete trainee.", "error");
+  }
 }
 </script>
 
@@ -30,7 +41,9 @@ async function remove() {
       <ChevronLeft class="h-4 w-4" /> Crew
     </RouterLink>
 
-    <p v-if="loading" class="text-sm text-faint">Loading…</p>
+    <Skeleton v-if="loading" variant="detail" />
+
+    <Alert v-else-if="error">{{ error }}</Alert>
 
     <template v-else-if="trainee">
       <Card class="p-4">
@@ -60,7 +73,7 @@ async function remove() {
         <p v-if="trainee.notes" class="mt-3 rounded-xl bg-elevated px-3 py-2 text-sm text-muted">{{ trainee.notes }}</p>
         <div class="mt-4 flex gap-2">
           <RouterLink :to="`/trainees/${id}/edit`" :class="btnClasses('ghost', 'sm')"><Pencil class="h-4 w-4" /> Edit</RouterLink>
-          <button :class="btnClasses('danger', 'sm')" @click="remove"><Trash2 class="h-4 w-4" /> Delete</button>
+          <button :class="btnClasses('danger', 'sm')" :disabled="deleting" @click="remove"><Trash2 class="h-4 w-4" /> {{ deleting ? "Deleting…" : "Delete" }}</button>
         </div>
       </Card>
 
@@ -84,5 +97,7 @@ async function remove() {
         </ul>
       </section>
     </template>
+
+    <Alert v-else>Trainee not found.</Alert>
   </div>
 </template>

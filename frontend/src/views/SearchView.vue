@@ -7,9 +7,11 @@ import type { SearchResults } from "@/lib/types";
 import { money, formatLongDate, formatTime } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import Avatar from "@/components/ui/Avatar.vue";
+import { toast } from "@/lib/toast";
 
 const q = ref("");
 const results = ref<SearchResults>();
+const searching = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let searchToken = 0;
 
@@ -18,12 +20,20 @@ watch(q, (val) => {
   searchToken++; // invalidate any in-flight request
   if (!val.trim()) {
     results.value = undefined;
+    searching.value = false;
     return;
   }
   const my = searchToken;
+  searching.value = true;
   timer = setTimeout(async () => {
-    const res = await api.get<SearchResults>(`/search?q=${encodeURIComponent(val)}`);
-    if (my === searchToken) results.value = res; // ignore stale (out-of-order) responses
+    try {
+      const res = await api.get<SearchResults>(`/search?q=${encodeURIComponent(val)}`);
+      if (my === searchToken) results.value = res; // ignore stale (out-of-order) responses
+    } catch (e) {
+      if (my === searchToken) toast(e instanceof Error && e.message ? e.message : "Search failed.", "error");
+    } finally {
+      if (my === searchToken) searching.value = false;
+    }
   }, 250);
 });
 
@@ -41,11 +51,12 @@ const empty = (r?: SearchResults) =>
         type="search"
         autofocus
         placeholder="Trainees, sessions, payments, items…"
-        class="w-full rounded-xl border border-line bg-elevated py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-faint focus:border-bronze/40"
+        class="w-full rounded-xl border border-line bg-elevated py-2.5 pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-faint focus:border-bronze focus:ring-2 focus:ring-bronze/25"
       />
     </div>
 
-    <p v-if="empty(results)" class="text-sm text-faint">No matches.</p>
+    <p v-if="searching && !results" class="text-sm text-faint">Searching…</p>
+    <p v-else-if="empty(results)" class="text-sm text-faint">No matches.</p>
 
     <template v-if="results">
       <section v-if="results.trainees.length" class="space-y-2">

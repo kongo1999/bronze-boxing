@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, RouterLink } from "vue-router";
+import NavLinks from "./NavLinks.vue";
 import {
   House,
   CalendarDays,
@@ -107,22 +108,7 @@ const rightTabs = computed(() => tabs.slice(2));
       >
       <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
     </RouterLink>
-    <nav class="flex flex-col gap-1">
-      <RouterLink
-        v-for="item in railItems"
-        :key="item.to"
-        :to="item.to"
-        class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
-        :class="
-          isActive(item.to)
-            ? 'bg-bronze/15 text-bronze'
-            : 'text-muted hover:bg-elevated hover:text-fg'
-        "
-      >
-        <component :is="item.icon" class="h-5 w-5" :stroke-width="isActive(item.to) ? 2.25 : 1.75" />
-        {{ item.label }}
-      </RouterLink>
-    </nav>
+    <NavLinks :items="railItems" />
     <button
       type="button"
       class="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-medium text-purple-ink shadow-[var(--shadow-btn)] transition-[transform,box-shadow] duration-150 ease-[var(--ease-out-quart)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-btn-hover)] active:translate-y-0 active:scale-[0.97]"
@@ -229,36 +215,7 @@ const rightTabs = computed(() => tabs.slice(2));
           <X class="h-5 w-5" />
         </button>
       </div>
-      <nav class="flex flex-col gap-1">
-        <RouterLink
-          v-for="item in railItems"
-          :key="item.to"
-          :to="item.to"
-          class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
-          :class="
-            isActive(item.to)
-              ? 'bg-bronze/15 text-bronze'
-              : 'text-muted hover:bg-elevated hover:text-fg'
-          "
-          @click="menuOpen = false"
-        >
-          <component :is="item.icon" class="h-5 w-5" :stroke-width="isActive(item.to) ? 2.25 : 1.75" />
-          {{ item.label }}
-        </RouterLink>
-        <RouterLink
-          to="/search"
-          class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors"
-          :class="
-            isActive('/search')
-              ? 'bg-bronze/15 text-bronze'
-              : 'text-muted hover:bg-elevated hover:text-fg'
-          "
-          @click="menuOpen = false"
-        >
-          <Search class="h-5 w-5" :stroke-width="1.75" />
-          Search
-        </RouterLink>
-      </nav>
+      <NavLinks :items="railItems" show-search @navigate="menuOpen = false" />
     </aside>
   </div>
 </template>

@@ -6,6 +6,8 @@ import { api } from "@/lib/api";
 import type { Trainee } from "@/lib/types";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
+import Alert from "@/components/ui/Alert.vue";
+import { inputCls } from "@/lib/ui";
 
 const route = useRoute();
 const router = useRouter();
@@ -47,8 +49,6 @@ async function submit() {
     saving.value = false;
   }
 }
-
-const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 </script>
 
 <template>
@@ -59,7 +59,7 @@ const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 t
     <h1 class="font-display text-2xl font-semibold">{{ editing ? "Edit trainee" : "Add trainee" }}</h1>
 
     <Card class="space-y-3 p-4">
-      <p v-if="error" class="rounded-lg bg-overdue/10 px-3 py-2 text-sm text-overdue">{{ error }}</p>
+      <Alert v-if="error">{{ error }}</Alert>
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Name</span>
         <input v-model="form.name" :class="inputCls" placeholder="Full name" />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Trash2, MapPin, Clock } from "lucide-vue-next";
 import { api } from "@/lib/api";
@@ -8,12 +9,15 @@ import { formatTime } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Avatar from "@/components/ui/Avatar.vue";
+import Skeleton from "@/components/ui/Skeleton.vue";
+import Alert from "@/components/ui/Alert.vue";
 import { btnClasses } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
-const { data: session, loading } = useCachedAsync(`/sessions/${id}`, () => api.get<Session>(`/sessions/${id}`));
+const { data: session, loading, error } = useCachedAsync(`/sessions/${id}`, () => api.get<Session>(`/sessions/${id}`));
 
 const dateLabel = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
@@ -26,12 +30,20 @@ async function setAttendance(a: Attendee, status: string) {
     await api.patch(`/sessions/${id}/attendance`, { trainee: a.trainee, status });
   } catch {
     a.status = prev;
+    toast("Couldn't save attendance.", "error");
   }
 }
+const deleting = ref(false);
 async function remove() {
-  if (!confirm("Delete this session?")) return;
-  await api.del(`/sessions/${id}`);
-  router.push("/schedule");
+  if (deleting.value || !confirm("Delete this session?")) return;
+  deleting.value = true;
+  try {
+    await api.del(`/sessions/${id}`);
+    router.push("/schedule");
+  } catch (e) {
+    deleting.value = false;
+    toast(e instanceof Error && e.message ? e.message : "Couldn't delete session.", "error");
+  }
 }
 </script>
 
@@ -40,7 +52,9 @@ async function remove() {
     <RouterLink to="/schedule" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
       <ChevronLeft class="h-4 w-4" /> Schedule
     </RouterLink>
-    <p v-if="loading" class="text-sm text-faint">Loading…</p>
+    <Skeleton v-if="loading" variant="detail" />
+
+    <Alert v-else-if="error">{{ error }}</Alert>
 
     <template v-else-if="session">
       <Card class="p-4">
@@ -55,7 +69,7 @@ async function remove() {
           <span class="inline-flex items-center gap-1"><Clock class="h-4 w-4" /> {{ formatTime(session.start) }} · {{ session.durationMin }}min</span>
           <span v-if="session.location" class="inline-flex items-center gap-1"><MapPin class="h-4 w-4" /> {{ session.location }}</span>
         </div>
-        <button :class="[btnClasses('danger', 'sm'), 'mt-4']" @click="remove"><Trash2 class="h-4 w-4" /> Delete</button>
+        <button :class="[btnClasses('danger', 'sm'), 'mt-4']" :disabled="deleting" @click="remove"><Trash2 class="h-4 w-4" /> {{ deleting ? "Deleting…" : "Delete" }}</button>
       </Card>
 
       <section class="space-y-2">
@@ -84,5 +98,7 @@ async function remove() {
         </ul>
       </section>
     </template>
+
+    <Alert v-else>Session not found.</Alert>
   </div>
 </template>

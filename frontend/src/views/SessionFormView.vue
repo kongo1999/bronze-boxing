@@ -6,6 +6,8 @@ import { api } from "@/lib/api";
 import type { Trainee } from "@/lib/types";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
+import Alert from "@/components/ui/Alert.vue";
+import { inputCls } from "@/lib/ui";
 
 const router = useRouter();
 const trainees = ref<Trainee[]>([]);
@@ -32,7 +34,6 @@ onMounted(async () => {
   trainees.value = (await api.get<Trainee[]>("/trainees")).filter((t) => t.status === "active");
 });
 
-const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 const dows = [
   { v: 1, l: "Mon" }, { v: 2, l: "Tue" }, { v: 3, l: "Wed" }, { v: 4, l: "Thu" },
   { v: 5, l: "Fri" }, { v: 6, l: "Sat" }, { v: 0, l: "Sun" },
@@ -91,7 +92,7 @@ async function submit() {
     <h1 class="font-display text-2xl font-semibold">New session</h1>
 
     <Card class="space-y-3 p-4">
-      <p v-if="error" class="rounded-lg bg-overdue/10 px-3 py-2 text-sm text-overdue">{{ error }}</p>
+      <Alert v-if="error">{{ error }}</Alert>
 
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Title</span>

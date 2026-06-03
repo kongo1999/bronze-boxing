@@ -7,9 +7,12 @@ import type { Reminder } from "@/lib/types";
 import { formatLongDate } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
+import Skeleton from "@/components/ui/Skeleton.vue";
+import Alert from "@/components/ui/Alert.vue";
 import { btnClasses } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 
-const { data, loading, reload } = useCachedAsync("/reminders", () => api.get<Reminder[]>("/reminders"));
+const { data, loading, error, reload } = useCachedAsync("/reminders", () => api.get<Reminder[]>("/reminders"));
 
 // Optimistic: flip the UI immediately, fire one request, revert only on failure.
 // No full-list refetch — that caused request pile-up and out-of-order overwrites.
@@ -20,6 +23,7 @@ async function toggle(r: Reminder) {
     await api.put(`/reminders/${r.id}`, { done: next });
   } catch {
     r.done = !next; // revert
+    toast("Couldn't update that reminder.", "error");
   }
 }
 async function remove(r: Reminder) {
@@ -31,6 +35,7 @@ async function remove(r: Reminder) {
     await api.del(`/reminders/${r.id}`);
   } catch {
     reload(); // restore true state on failure
+    toast("Couldn't delete that reminder.", "error");
   }
 }
 const dotColor = (p: string) => (p === "high" ? "bg-overdue" : p === "normal" ? "bg-bronze" : "bg-faint");
@@ -44,7 +49,11 @@ const dotColor = (p: string) => (p === "high" ? "bg-overdue" : p === "normal" ? 
       </template>
     </PageHeader>
 
-    <p v-if="loading" class="text-sm text-faint">Loading…</p>
+    <Skeleton v-if="loading" :rows="4" />
+    <Alert v-else-if="error">
+      {{ error }}
+      <button class="ml-1 font-medium underline" @click="reload">Retry</button>
+    </Alert>
     <EmptyState v-else-if="(data ?? []).length === 0" :icon="Bell" title="No reminders" description="Add things you need to remember this week." />
     <ul v-else class="space-y-2">
       <li

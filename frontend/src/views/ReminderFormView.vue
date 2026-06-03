@@ -5,12 +5,13 @@ import { ChevronLeft } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
+import Alert from "@/components/ui/Alert.vue";
+import { inputCls } from "@/lib/ui";
 
 const router = useRouter();
 const saving = ref(false);
 const error = ref<string>();
 const form = reactive({ title: "", dueDate: new Date().toISOString().slice(0, 10), priority: "normal" });
-const inputCls = "w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none focus:border-bronze/40";
 
 async function submit() {
   if (!form.title.trim()) return (error.value = "Title is required");
@@ -37,7 +38,7 @@ async function submit() {
     </RouterLink>
     <h1 class="font-display text-2xl font-semibold">New reminder</h1>
     <Card class="space-y-3 p-4">
-      <p v-if="error" class="rounded-lg bg-overdue/10 px-3 py-2 text-sm text-overdue">{{ error }}</p>
+      <Alert v-if="error">{{ error }}</Alert>
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Title</span>
         <input v-model="form.title" :class="inputCls" placeholder="Order new gloves" />

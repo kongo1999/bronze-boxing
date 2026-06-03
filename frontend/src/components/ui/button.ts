@@ -10,6 +10,7 @@ export function btnClasses(variant: BtnVariant = "primary", size: BtnSize = "md"
     "transition-[transform,box-shadow,background-color,border-color] duration-150 ease-[var(--ease-out-quart)] " +
     "hover:-translate-y-0.5 hover:shadow-[var(--shadow-btn-hover)] " +
     "active:translate-y-0 active:scale-[0.97] active:shadow-[var(--shadow-btn)] " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bronze focus-visible:ring-offset-2 focus-visible:ring-offset-canvas " +
     "disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:hover:translate-y-0";
   const sizes: Record<BtnSize, string> = {
     md: "h-11 px-4 text-sm",

@@ -11,10 +11,13 @@ import EmptyState from "@/components/ui/EmptyState.vue";
 import Avatar from "@/components/ui/Avatar.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Button from "@/components/ui/Button.vue";
+import Skeleton from "@/components/ui/Skeleton.vue";
+import Alert from "@/components/ui/Alert.vue";
 import { btnClasses } from "@/components/ui/button";
+import { inputCls } from "@/lib/ui";
 
 const q = ref("");
-const { data, loading } = useCachedAsync("/trainees", () => api.get<Trainee[]>(`/trainees`));
+const { data, loading, error, reload } = useCachedAsync("/trainees", () => api.get<Trainee[]>(`/trainees`));
 
 const filtered = computed(() => {
   const list = data.value ?? [];
@@ -34,14 +37,14 @@ const activeCount = computed(() => filtered.value.filter((t) => t.status === "ac
       </template>
     </PageHeader>
 
-    <input
-      v-model="q"
-      type="search"
-      placeholder="Search by name…"
-      class="w-full rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm outline-none placeholder:text-faint focus:border-bronze/40"
-    />
+    <input v-model="q" type="search" placeholder="Search by name…" :class="inputCls" />
 
-    <p v-if="loading" class="text-sm text-faint">Loading…</p>
+    <Skeleton v-if="loading" :rows="5" />
+
+    <Alert v-else-if="error">
+      {{ error }}
+      <button class="ml-1 font-medium underline" @click="reload">Retry</button>
+    </Alert>
 
     <EmptyState
       v-else-if="filtered.length === 0"

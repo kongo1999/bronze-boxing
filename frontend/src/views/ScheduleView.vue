@@ -4,6 +4,7 @@ import { RouterLink } from "vue-router";
 import { ChevronLeft, ChevronRight, CalendarPlus } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
+import { toast } from "@/lib/toast";
 import type { Session } from "@/lib/types";
 import { formatTime } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -31,10 +32,14 @@ async function load() {
   const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
   const next = new Date(y, m + 1, 1);
   const to = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
-  const res = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
-  if (my !== loadToken) return; // ignore stale (out-of-order) responses
-  sessions.value = res;
-  writeCache(cacheKey(), res);
+  try {
+    const res = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
+    if (my !== loadToken) return; // ignore stale (out-of-order) responses
+    sessions.value = res;
+    writeCache(cacheKey(), res);
+  } catch {
+    if (my === loadToken) toast("Couldn't load the schedule.", "error");
+  }
 }
 function showCached() {
   const hit = readCache<Session[]>(cacheKey());
@@ -99,7 +104,7 @@ const dows = ["M", "T", "W", "T", "F", "S", "S"];
         <button
           v-for="(cell, ci) in week"
           :key="ci"
-          class="relative aspect-square rounded-lg text-sm transition-colors"
+          class="relative aspect-square rounded-lg text-sm transition-[transform,background-color,color] duration-150 ease-[var(--ease-out-quart)] active:scale-90"
           :class="[
             cell.inMonth ? 'text-fg' : 'text-faint/40',
             sameDay(cell.date, selected) ? 'bg-bronze text-bronze-ink font-semibold' : 'hover:bg-elevated',
