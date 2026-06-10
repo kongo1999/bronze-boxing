@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { authRequired, getToken } from "@/lib/auth";
 
 const routes = [
+  { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
+
   { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
 
   { path: "/trainees", name: "trainees", component: () => import("@/views/TraineesView.vue") },
@@ -20,13 +23,26 @@ const routes = [
 
   { path: "/financials", name: "financials", component: () => import("@/views/FinancialsView.vue") },
   { path: "/inventory", name: "inventory", component: () => import("@/views/InventoryView.vue") },
+  { path: "/sales/:id", name: "sale-detail", component: () => import("@/views/SaleDetailView.vue") },
   { path: "/search", name: "search", component: () => import("@/views/SearchView.vue") },
 
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior: () => ({ top: 0 }),
 });
+
+// Login gate: only when the API actually requires a token (API_TOKEN set on
+// the server). Local dev and demo mode skip this entirely.
+router.beforeEach(async (to) => {
+  if (to.name === "login") return true;
+  if ((await authRequired()) && !getToken()) {
+    return { name: "login", query: { to: to.fullPath } };
+  }
+  return true;
+});
+
+export default router;

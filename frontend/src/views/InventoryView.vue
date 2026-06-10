@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue";
+import { RouterLink } from "vue-router";
 import { Plus, Package } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
@@ -166,12 +167,17 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
       <section v-if="sales.length > 0" class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Recent sales</h2>
         <ul class="space-y-2">
-          <li v-for="s in sales.slice(0, 10)" :key="s.id" class="flex items-center justify-between rounded-xl border border-line bg-surface px-3 py-2.5">
-            <div class="min-w-0">
-              <p class="truncate text-sm font-medium">{{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span></p>
-              <p class="truncate text-xs text-faint">{{ s.traineeName || "Walk-in" }} · {{ formatLongDate(s.date) }}</p>
-            </div>
-            <span class="font-display text-sm tnum">{{ money(s.total) }}</span>
+          <li v-for="s in sales.slice(0, 10)" :key="s.id">
+            <RouterLink
+              :to="`/sales/${s.id}`"
+              class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 transition-colors hover:border-bronze/30"
+            >
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium">{{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span></p>
+                <p class="truncate text-xs text-faint">{{ s.traineeName || "Walk-in" }} · {{ formatLongDate(s.date) }}</p>
+              </div>
+              <span class="font-display text-sm tnum">{{ money(s.total) }}</span>
+            </RouterLink>
           </li>
         </ul>
       </section>

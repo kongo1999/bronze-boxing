@@ -45,7 +45,7 @@ nano .env
 Set at minimum:
 - `MONGO_PASSWORD` — a long random string (`openssl rand -hex 24`). **Set before first boot** — it's baked into the Mongo volume on creation.
 - `SITE_ADDRESS` — your domain (HTTPS) or leave `:80` (HTTP on the IP).
-- `API_TOKEN` — **leave empty for now.** The frontend login isn't wired yet; an API token would lock the SPA out. Turn it on together with the login step (see "Securing" below).
+- `API_TOKEN` — a long random string (`openssl rand -hex 32`). With it set, the app shows a login screen; enter this same token there to unlock. Leave empty only if the droplet is otherwise access-restricted.
 
 ## 6. Launch
 ```bash
@@ -86,21 +86,24 @@ docker compose exec -T mongo mongorestore --username "$MONGO_USER" --password "$
 The data also persists in the `mongo_data` Docker volume across container restarts.
 
 ## Seeding demo data (optional, first run)
-The seeder is a separate Go entrypoint. Quickest one-off:
+The compose file ships a one-off `seed` service (behind a profile, so `up` never
+runs it by accident). **It wipes all collections** and loads demo data:
 ```bash
-docker compose exec api /server   # (no) — the image only ships the API binary
+docker compose --profile seed run --rm --build seed
 ```
-To seed, run the seeder from a Go toolchain pointed at the DB, or add a `seed` build
-target later. For a real studio you'd just start entering data through the UI.
+For a real studio, skip this and enter data through the UI.
 
 ---
 
-## Securing the API (do this before real use)
-Auth is built but **off by default**. To turn it on you need both halves:
-1. Backend: set `API_TOKEN` in `.env` and `docker compose up -d`. Every `/api` call now needs `Authorization: Bearer <token>` (`/api/health` stays open).
-2. Frontend: the login screen that stores the token and sends the header — **not yet wired** (next task). Don't enable `API_TOKEN` until that ships, or the SPA will get 401s.
-
-Until then, keep the droplet access-restricted (don't share the URL, or put it behind a VPN/allow-list).
+## How auth works
+- `API_TOKEN` set → every `/api` call requires `Authorization: Bearer <token>`
+  (`/api/health` stays public and reports `authRequired: true`).
+- The SPA detects this and shows a login screen; the entered token is verified
+  against `/api/auth/check`, stored in the browser, and attached to every call.
+  A 401 (token rotated/revoked) clears it and returns to the login screen.
+- To rotate the token: change `API_TOKEN` in `.env`, `docker compose up -d api`,
+  then everyone logs in again with the new token.
+- `API_TOKEN` empty → no auth, no login screen. Only for access-restricted droplets.
 
 ## Troubleshooting
 - **Build killed / OOM** → droplet too small; use 2 GB+ or `docker compose build` one service at a time.

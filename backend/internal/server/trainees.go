@@ -111,8 +111,12 @@ func (h *traineeHandler) update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
 	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "name is required")
+	}
 	set := bson.M{
-		"name":       strings.TrimSpace(in.Name),
+		"name":       in.Name,
 		"phone":      in.Phone,
 		"skillLevel": in.SkillLevel,
 		"monthlyFee": in.MonthlyFee,

@@ -1,6 +1,7 @@
 // Tiny typed fetch client. Dev server proxies /api -> Go server (:8080).
 
 import { isDemo, demoResolve } from "./demo";
+import { getToken, clearToken } from "./auth";
 
 const BASE = "/api";
 
@@ -9,10 +10,24 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (isDemo) {
     return demoResolve<T>(path, (opts.method ?? "GET").toUpperCase(), opts.body ?? null);
   }
+  const token = getToken();
   const res = await fetch(BASE + path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
     ...opts,
   });
+  // Token missing/revoked → drop it and send the user to the login gate.
+  // (Full navigation, not router.push, to avoid an import cycle with the router.)
+  if (res.status === 401) {
+    clearToken();
+    if (!window.location.pathname.startsWith("/login")) {
+      window.location.assign("/login");
+    }
+    throw new Error("Signed out — enter the access token.");
+  }
   if (!res.ok) {
     let msg = res.statusText;
     try {

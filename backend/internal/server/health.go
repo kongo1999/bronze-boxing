@@ -9,8 +9,11 @@ import (
 	"bronzeboxing/internal/db"
 )
 
-// registerHealth exposes GET /api/health to diagnose DB connectivity.
-func registerHealth(r fiber.Router, store *db.Store) {
+// registerHealth exposes GET /api/health to diagnose DB connectivity. It also
+// tells the SPA whether the API requires a bearer token (authRequired), so the
+// login gate only appears when API_TOKEN is configured. This endpoint stays
+// public — it never reveals the token itself.
+func registerHealth(r fiber.Router, store *db.Store, authRequired bool) {
 	r.Get("/health", func(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
 		defer cancel()
@@ -21,9 +24,10 @@ func registerHealth(r fiber.Router, store *db.Store) {
 			status = "degraded"
 		}
 		return c.JSON(fiber.Map{
-			"status": status,
-			"db":     dbOK,
-			"time":   time.Now().UTC(),
+			"status":       status,
+			"db":           dbOK,
+			"authRequired": authRequired,
+			"time":         time.Now().UTC(),
 		})
 	})
 }

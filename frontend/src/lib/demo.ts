@@ -234,8 +234,14 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       if (method === "POST") { const p: Payment = { id: genId(), type: "other", date: nowISO, ...body, traineeName: body.trainee ? tName(body.trainee) : undefined, createdAt: nowISO }; payments.unshift(p); return r(p); }
       return r(payments);
     }
+    if (seg[1] === "export") {
+      const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+      const rows = payments.map((p) => [p.date.slice(0, 10), p.traineeName ?? "", p.type, p.periodMonth ?? "", p.amount.toFixed(2), p.note ?? ""].map(esc).join(","));
+      return r(["Date,Trainee,Type,Period,Amount,Note", ...rows].join("\n"));
+    }
     const id = seg[1];
     if (seg[2] === "receipt") return r({ studio: "Bronze Boxing", payment: payments.find((p) => p.id === id), issued: nowISO });
+    if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p) { Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; } return r(p); }
     if (method === "DELETE") { rm(payments, id); return r({ ok: true }); }
   }
 
@@ -256,7 +262,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       if (method === "POST") { const e: Expense = { id: genId(), category: "other", date: nowISO, ...body, createdAt: nowISO }; expenses.unshift(e); return r(e); }
       return r(expenses);
     }
-    if (method === "DELETE") { rm(expenses, seg[1]); return r({ ok: true }); }
+    const id = seg[1];
+    if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e) Object.assign(e, body); return r(e); }
+    if (method === "DELETE") { rm(expenses, id); return r({ ok: true }); }
   }
 
   // /inventory + /sales
@@ -280,7 +288,29 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     if (method === "PUT") { const it = inventory.find((x) => x.id === id); if (it) Object.assign(it, body, { updatedAt: nowISO }); return r(it); }
     if (method === "DELETE") { rm(inventory, id); return r({ ok: true }); }
   }
-  if (seg[0] === "sales") return r(sales);
+  if (seg[0] === "sales") {
+    if (seg.length === 1) return r(sales);
+    const id = seg[1];
+    if (method === "DELETE") {
+      const sale = sales.find((x) => x.id === id);
+      if (sale) { const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; rm(sales, id); }
+      return r({ ok: true, restocked: sale?.qty ?? 0 });
+    }
+    if (method === "PUT") {
+      const sale = sales.find((x) => x.id === id);
+      if (sale) {
+        if (typeof body.qty === "number") {
+          const it = inventory.find((x) => x.id === sale.item);
+          if (it) it.stock = Math.max(0, it.stock - (body.qty - sale.qty));
+          sale.qty = body.qty;
+          sale.total = sale.unitPrice * body.qty;
+        }
+        if (body.trainee !== undefined) { sale.trainee = body.trainee || undefined; sale.traineeName = body.trainee ? tName(body.trainee) : undefined; }
+      }
+      return r(sale);
+    }
+    return r(sales.find((s) => s.id === id)); // GET /sales/:id
+  }
 
   // Fallback
   return r({ ok: true });

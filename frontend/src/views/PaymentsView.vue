@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, reactive, computed, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { Plus, Receipt, Download } from "lucide-vue-next";
+import { Plus, Receipt, Download, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import type { Payment, SubStatus } from "@/lib/types";
@@ -14,7 +14,9 @@ import EmptyState from "@/components/ui/EmptyState.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import MonthPicker from "@/components/ui/MonthPicker.vue";
+import Button from "@/components/ui/Button.vue";
 import { btnClasses } from "@/components/ui/button";
+import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
 
 const month = ref(monthKey());
@@ -75,8 +77,50 @@ async function removePayment(id: string) {
     toast(e instanceof Error && e.message ? e.message : "Couldn't delete payment.", "error");
   }
 }
-function exportCsv() {
-  window.open(`/api/payments/export?m=${month.value}`, "_blank");
+
+// Inline edit (PUT /payments/:id). Carries the existing trainee link through so
+// editing amount/type/note doesn't unlink the trainee.
+const editingId = ref<string | null>(null);
+const savingEdit = ref(false);
+const editForm = reactive({ amount: 0, type: "subscription", periodMonth: "", note: "", trainee: undefined as string | undefined });
+function openEdit(p: Payment) {
+  editingId.value = editingId.value === p.id ? null : p.id;
+  Object.assign(editForm, { amount: p.amount, type: p.type, periodMonth: p.periodMonth ?? "", note: p.note ?? "", trainee: p.trainee });
+}
+async function saveEdit(id: string) {
+  if (savingEdit.value || editForm.amount <= 0) return;
+  savingEdit.value = true;
+  try {
+    await api.put(`/payments/${id}`, {
+      amount: editForm.amount,
+      type: editForm.type,
+      periodMonth: editForm.type === "subscription" ? editForm.periodMonth : "",
+      note: editForm.note,
+      trainee: editForm.trainee || "",
+    });
+    editingId.value = null;
+    await load();
+    toast("Payment updated.", "success");
+  } catch (e) {
+    toast(e instanceof Error && e.message ? e.message : "Couldn't update payment.", "error");
+  } finally {
+    savingEdit.value = false;
+  }
+}
+// Fetch through the api client (carries the auth header — window.open can't),
+// then hand the CSV to the browser as a download.
+async function exportCsv() {
+  try {
+    const csv = await api.get<string>(`/payments/export?m=${month.value}`);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payments-${month.value}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast(e instanceof Error && e.message ? e.message : "Couldn't export CSV.", "error");
+  }
 }
 </script>
 
@@ -139,14 +183,36 @@ function exportCsv() {
         </div>
         <EmptyState v-if="payments.length === 0" :icon="Receipt" title="No payments this month" description="Cash you collect will show up here." />
         <ul v-else class="space-y-2">
-          <li v-for="p in payments" :key="p.id" class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
-            <div class="min-w-0">
-              <p class="truncate text-sm font-medium">{{ p.traineeName || "—" }}</p>
-              <p class="truncate text-xs text-faint">{{ typeLabel[p.type] ?? p.type }}{{ p.periodMonth ? ` · ${monthLabel(p.periodMonth)}` : "" }} · {{ formatLongDate(p.date) }}</p>
+          <li v-for="p in payments" :key="p.id" class="rounded-xl border border-line bg-surface">
+            <div class="flex items-center justify-between gap-3 px-3 py-2.5">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium">{{ p.traineeName || "—" }}</p>
+                <p class="truncate text-xs text-faint">{{ typeLabel[p.type] ?? p.type }}{{ p.periodMonth ? ` · ${monthLabel(p.periodMonth)}` : "" }} · {{ formatLongDate(p.date) }}</p>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <span class="font-display text-sm tnum">{{ money(p.amount) }}</span>
+                <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" :aria-label="`Edit payment`" @click="openEdit(p)"><Pencil class="h-4 w-4" /></button>
+                <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete payment" @click="removePayment(p.id)">×</button>
+              </div>
             </div>
-            <div class="flex shrink-0 items-center gap-3">
-              <span class="font-display text-sm tnum">{{ money(p.amount) }}</span>
-              <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete payment" @click="removePayment(p.id)">×</button>
+            <div v-if="editingId === p.id" class="space-y-2 border-t border-line px-3 py-3">
+              <div class="grid grid-cols-2 gap-2">
+                <label class="block"><span class="mb-1 block text-xs text-faint">Amount</span><input v-model.number="editForm.amount" type="number" min="0" :class="inputCls" /></label>
+                <label class="block"><span class="mb-1 block text-xs text-faint">Type</span>
+                  <select v-model="editForm.type" :class="inputCls">
+                    <option value="subscription">Subscription</option>
+                    <option value="private">Private session</option>
+                    <option value="dropin">Drop-in</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+              </div>
+              <label v-if="editForm.type === 'subscription'" class="block"><span class="mb-1 block text-xs text-faint">Period month (YYYY-MM)</span><input v-model="editForm.periodMonth" :class="inputCls" placeholder="2026-06" /></label>
+              <label class="block"><span class="mb-1 block text-xs text-faint">Note</span><input v-model="editForm.note" :class="inputCls" /></label>
+              <div class="flex gap-2">
+                <Button size="sm" :disabled="savingEdit || editForm.amount <= 0" @click="saveEdit(p.id)">{{ savingEdit ? "Saving…" : "Save changes" }}</Button>
+                <Button size="sm" variant="ghost" @click="editingId = null">Cancel</Button>
+              </div>
             </div>
           </li>
         </ul>

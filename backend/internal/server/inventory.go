@@ -24,6 +24,7 @@ func registerInventory(r fiber.Router, store *db.Store) {
 	g.Delete("/:id", h.remove)
 	g.Post("/:id/sell", h.sell)
 	r.Get("/sales", h.sales)
+	r.Get("/sales/:id", h.getSale)
 	r.Put("/sales/:id", h.correctSale)  // correct qty / buyer (adjusts stock)
 	r.Delete("/sales/:id", h.voidSale)  // void a sale (restocks)
 }
@@ -98,11 +99,15 @@ func (h *inventoryHandler) update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
 	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "name is required")
+	}
 	if in.Price < 0 || in.CostPrice < 0 || in.Stock < 0 || in.LowStockThreshold < 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "price, stock and thresholds must be non-negative")
 	}
 	set := bson.M{
-		"name":              strings.TrimSpace(in.Name),
+		"name":              in.Name,
 		"sku":               in.SKU,
 		"stock":             in.Stock,
 		"price":             in.Price,
@@ -232,6 +237,21 @@ func (h *inventoryHandler) sales(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(out)
+}
+
+// getSale returns a single sale by id (powers the sale detail page).
+func (h *inventoryHandler) getSale(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var sale models.Sale
+	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&sale); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "sale not found")
+	}
+	return c.JSON(sale)
 }
 
 // voidSale reverses a sale: it puts the sold quantity back into stock and

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
-import { Plus } from "lucide-vue-next";
+import { Plus, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import type { Financials, Expense } from "@/lib/types";
@@ -84,6 +84,29 @@ async function removeExpense(id: string) {
     toast(e instanceof Error && e.message ? e.message : "Couldn't delete expense.", "error");
   }
 }
+
+// Inline edit (PUT /expenses/:id).
+const editingId = ref<string | null>(null);
+const savingEdit = ref(false);
+const editForm = reactive({ amount: 0, category: "rent", note: "" });
+function openEditExpense(e: Expense) {
+  editingId.value = editingId.value === e.id ? null : e.id;
+  Object.assign(editForm, { amount: e.amount, category: e.category, note: e.note ?? "" });
+}
+async function saveExpenseEdit(id: string) {
+  if (savingEdit.value || editForm.amount <= 0) return;
+  savingEdit.value = true;
+  try {
+    await api.put(`/expenses/${id}`, { amount: editForm.amount, category: editForm.category, note: editForm.note });
+    editingId.value = null;
+    await load();
+    toast("Expense updated.", "success");
+  } catch (e) {
+    toast(e instanceof Error && e.message ? e.message : "Couldn't update expense.", "error");
+  } finally {
+    savingEdit.value = false;
+  }
+}
 const catLabel: Record<string, string> = {
   rent: "Rent", equipment: "Equipment", utilities: "Utilities", supplies: "Supplies", wages: "Wages", other: "Other",
 };
@@ -140,14 +163,30 @@ const catLabel: Record<string, string> = {
         </Card>
 
         <ul class="space-y-2">
-          <li v-for="e in expenses" :key="e.id" class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
-            <div class="min-w-0">
-              <p class="text-sm font-medium">{{ catLabel[e.category] ?? e.category }}</p>
-              <p v-if="e.note" class="truncate text-xs text-faint">{{ e.note }}</p>
+          <li v-for="e in expenses" :key="e.id" class="rounded-xl border border-line bg-surface">
+            <div class="flex items-center justify-between gap-3 px-3 py-2.5">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">{{ catLabel[e.category] ?? e.category }}</p>
+                <p v-if="e.note" class="truncate text-xs text-faint">{{ e.note }}</p>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <span class="font-display text-sm text-overdue tnum">−{{ money(e.amount) }}</span>
+                <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit expense" @click="openEditExpense(e)"><Pencil class="h-4 w-4" /></button>
+                <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete expense" @click="removeExpense(e.id)">×</button>
+              </div>
             </div>
-            <div class="flex shrink-0 items-center gap-3">
-              <span class="font-display text-sm text-overdue tnum">−{{ money(e.amount) }}</span>
-              <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete expense" @click="removeExpense(e.id)">×</button>
+            <div v-if="editingId === e.id" class="space-y-2 border-t border-line px-3 py-3">
+              <div class="grid grid-cols-2 gap-2">
+                <input v-model.number="editForm.amount" type="number" min="0" placeholder="Amount" :class="inputCls" />
+                <select v-model="editForm.category" :class="inputCls">
+                  <option v-for="(l, k) in catLabel" :key="k" :value="k">{{ l }}</option>
+                </select>
+              </div>
+              <input v-model="editForm.note" placeholder="Note (optional)" :class="inputCls" />
+              <div class="flex gap-2">
+                <Button size="sm" :disabled="savingEdit || editForm.amount <= 0" @click="saveExpenseEdit(e.id)">{{ savingEdit ? "Saving…" : "Save changes" }}</Button>
+                <Button size="sm" variant="ghost" @click="editingId = null">Cancel</Button>
+              </div>
             </div>
           </li>
           <li v-if="expenses.length === 0" class="px-1 text-sm text-faint">No expenses logged this month.</li>

@@ -34,7 +34,12 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	}
 
 	api := app.Group("/api")
-	registerHealth(api, store)
+	registerHealth(api, store, cfg.APIToken != "")
+	// Sits behind requireToken (unlike /health), so the login screen can verify
+	// a candidate token with a cheap request before storing it.
+	api.Get("/auth/check", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"ok": true})
+	})
 	registerTrainees(api, store)
 	registerSessions(api, store)
 	registerPayments(api, store)
