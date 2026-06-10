@@ -24,15 +24,30 @@ const form = reactive({
 });
 const saving = ref(false);
 const error = ref<string>();
+// When editing, the form stays locked until the current values are actually
+// loaded — otherwise a failed prefill would submit blanks over real data.
+const loading = ref(editing);
 
 onMounted(async () => {
-  if (editing) {
+  if (!editing) return;
+  try {
     const t = await api.get<Trainee>(`/trainees/${id}`);
-    Object.assign(form, { ...t, skillLevel: t.skillLevel ?? "" });
+    Object.assign(form, {
+      name: t.name ?? "",
+      phone: t.phone ?? "",
+      skillLevel: t.skillLevel ?? "",
+      monthlyFee: t.monthlyFee ?? 0,
+      status: t.status ?? "active",
+      notes: t.notes ?? "",
+    });
+    loading.value = false;
+  } catch (e) {
+    error.value = e instanceof Error && e.message ? e.message : "Couldn't load the trainee — go back and retry.";
   }
 });
 
 async function submit() {
+  if (loading.value) return;
   if (!form.name.trim()) {
     error.value = "Name is required";
     return;
@@ -94,7 +109,7 @@ async function submit() {
         <span class="mb-1 block text-xs text-faint">Notes</span>
         <textarea v-model="form.notes" rows="3" :class="inputCls" />
       </label>
-      <Button :disabled="saving" @click="submit">{{ saving ? "Saving…" : "Save" }}</Button>
+      <Button :disabled="saving || loading" @click="submit">{{ saving ? "Saving…" : loading ? "Loading…" : "Save" }}</Button>
     </Card>
   </div>
 </template>

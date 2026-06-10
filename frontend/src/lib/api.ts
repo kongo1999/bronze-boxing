@@ -40,6 +40,12 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") || "";
+  // An HTML body on an /api call means something intercepted the request
+  // (transparent ISP cache, captive portal, misrouted proxy). Returning it as
+  // data silently corrupts forms that prefill from it — fail loudly instead.
+  if (ct.includes("text/html")) {
+    throw new Error("Unexpected response from the server — check the connection and retry.");
+  }
   if (!ct.includes("application/json")) {
     return (await res.text()) as unknown as T;
   }
