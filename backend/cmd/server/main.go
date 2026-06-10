@@ -27,6 +27,22 @@ func main() {
 	}
 	log.Printf("connected to MongoDB (%s/%s)", cfg.MongoURI, cfg.DBName)
 
+	// Auth indexes + admin account bootstrap (synced from ADMIN_USERNAME /
+	// ADMIN_PASSWORD; password rotation revokes that account's sessions).
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := server.EnsureAuth(ctx, store, cfg.AdminUsername, cfg.AdminPassword); err != nil {
+			cancel()
+			log.Fatalf("auth bootstrap failed: %v", err)
+		}
+		cancel()
+		if cfg.AdminPassword != "" {
+			log.Printf("auth enabled — admin account %q ready", cfg.AdminUsername)
+		} else {
+			log.Println("auth DISABLED (no ADMIN_PASSWORD set) — do not expose this to the internet")
+		}
+	}
+
 	app := server.New(cfg, store)
 
 	go func() {

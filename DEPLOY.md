@@ -45,7 +45,10 @@ nano .env
 Set at minimum:
 - `MONGO_PASSWORD` — a long random string (`openssl rand -hex 24`). **Set before first boot** — it's baked into the Mongo volume on creation.
 - `SITE_ADDRESS` — your domain (HTTPS) or leave `:80` (HTTP on the IP).
-- `API_TOKEN` — a long random string (`openssl rand -hex 32`). With it set, the app shows a login screen; enter this same token there to unlock. Leave empty only if the droplet is otherwise access-restricted.
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` — the login for the app. The admin
+  account is created from these when the API boots; sign in to the app with
+  exactly these credentials. Leave the password empty only if the droplet is
+  otherwise access-restricted (disables login entirely).
 
 ## 6. Launch
 ```bash
@@ -96,14 +99,21 @@ For a real studio, skip this and enter data through the UI.
 ---
 
 ## How auth works
-- `API_TOKEN` set → every `/api` call requires `Authorization: Bearer <token>`
-  (`/api/health` stays public and reports `authRequired: true`).
-- The SPA detects this and shows a login screen; the entered token is verified
-  against `/api/auth/check`, stored in the browser, and attached to every call.
-  A 401 (token rotated/revoked) clears it and returns to the login screen.
-- To rotate the token: change `API_TOKEN` in `.env`, `docker compose up -d api`,
-  then everyone logs in again with the new token.
-- `API_TOKEN` empty → no auth, no login screen. Only for access-restricted droplets.
+- Accounts live in the `users` collection (bcrypt password hashes). On boot the
+  API creates/syncs the **admin account** from `ADMIN_USERNAME` /
+  `ADMIN_PASSWORD` in `.env` — the env file is the source of truth for that
+  one account.
+- The SPA shows a sign-in screen (username + password). `POST /api/auth/login`
+  (rate-limited per IP) exchanges credentials for a 30-day session token, which
+  the browser stores and sends as a Bearer header on every call. Sessions are
+  server-side (hashed tokens in `auth_sessions`, auto-expired by Mongo TTL), so
+  sign-out and password rotation revoke them for real.
+- **Rotate the password:** edit `ADMIN_PASSWORD` in `.env`, then
+  `docker compose up -d api`. All existing sessions for the account are revoked
+  and everyone signs in again with the new password.
+- `ADMIN_PASSWORD` empty → auth disabled, no login screen (the API logs a
+  warning). Only for access-restricted droplets — never on the open internet.
+- `/api/health` stays public for uptime checks and reports `authRequired`.
 
 ## Troubleshooting
 - **Build killed / OOM** → droplet too small; use 2 GB+ or `docker compose build` one service at a time.

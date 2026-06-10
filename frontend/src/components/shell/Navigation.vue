@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import { useRoute, RouterLink } from "vue-router";
+import { useRoute, useRouter, RouterLink } from "vue-router";
 import NavLinks from "./NavLinks.vue";
+import { getToken, logout } from "@/lib/auth";
 import {
   House,
   CalendarDays,
@@ -18,12 +19,23 @@ import {
   BellPlus,
   Menu,
   Search,
+  LogOut,
   type LucideIcon,
 } from "lucide-vue-next";
 
 const route = useRoute();
+const router = useRouter();
 const addOpen = ref(false);
 const menuOpen = ref(false);
+
+// Signed-in state at mount is enough: the shell (and this nav) remounts on the
+// login→app transition, and sign-out leaves the shell entirely.
+const authed = getToken() !== null;
+async function signOut() {
+  menuOpen.value = false;
+  await logout();
+  router.push("/login");
+}
 
 interface NavItem {
   to: string;
@@ -115,6 +127,14 @@ const rightTabs = computed(() => tabs.slice(2));
       @click="addOpen = true"
     >
       <Plus class="h-5 w-5" :stroke-width="2.5" /> Quick add
+    </button>
+    <button
+      v-if="authed"
+      type="button"
+      class="mt-auto inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-faint transition-colors hover:bg-elevated hover:text-fg"
+      @click="signOut"
+    >
+      <LogOut class="h-4 w-4" /> Sign out
     </button>
   </aside>
 
@@ -216,6 +236,14 @@ const rightTabs = computed(() => tabs.slice(2));
         </button>
       </div>
       <NavLinks :items="railItems" show-search @navigate="menuOpen = false" />
+      <button
+        v-if="authed"
+        type="button"
+        class="mt-auto inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-faint transition-colors hover:bg-elevated hover:text-fg"
+        @click="signOut"
+      >
+        <LogOut class="h-4 w-4" /> Sign out
+      </button>
     </aside>
   </div>
 </template>

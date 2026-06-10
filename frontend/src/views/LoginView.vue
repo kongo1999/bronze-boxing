@@ -2,7 +2,7 @@
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Lock } from "lucide-vue-next";
-import { setToken, verifyToken } from "@/lib/auth";
+import { login } from "@/lib/auth";
 import { clearCache } from "@/lib/cache";
 import Button from "@/components/ui/Button.vue";
 import { inputCls } from "@/lib/ui";
@@ -10,22 +10,22 @@ import { inputCls } from "@/lib/ui";
 const route = useRoute();
 const router = useRouter();
 
-const token = ref("");
+const username = ref("");
+const password = ref("");
 const checking = ref(false);
 const error = ref("");
 
 async function submit() {
-  const t = token.value.trim();
-  if (!t || checking.value) return;
+  if (checking.value || !username.value.trim() || !password.value) return;
   checking.value = true;
   error.value = "";
-  if (await verifyToken(t)) {
-    setToken(t);
+  const err = await login(username.value.trim(), password.value);
+  if (err === null) {
     clearCache();
     const to = typeof route.query.to === "string" ? route.query.to : "/";
     router.push(to);
   } else {
-    error.value = "That token didn't work. Check it and try again.";
+    error.value = err;
     checking.value = false;
   }
 }
@@ -39,27 +39,30 @@ async function submit() {
           <Lock class="h-6 w-6" />
         </div>
         <h1 class="font-display text-2xl font-semibold">Bronze Boxing</h1>
-        <p class="text-sm text-muted">Enter the studio access token to continue.</p>
+        <p class="text-sm text-muted">Sign in to manage the studio.</p>
       </div>
 
       <form class="space-y-3" @submit.prevent="submit">
         <input
-          v-model="token"
-          type="password"
-          autocomplete="current-password"
-          placeholder="Access token"
+          v-model="username"
+          type="text"
+          autocomplete="username"
+          placeholder="Username"
           :class="inputCls"
           autofocus
         />
+        <input
+          v-model="password"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Password"
+          :class="inputCls"
+        />
         <p v-if="error" class="text-sm text-overdue">{{ error }}</p>
-        <Button class="w-full" :disabled="checking || !token.trim()" type="submit">
-          {{ checking ? "Checking…" : "Unlock" }}
+        <Button class="w-full" :disabled="checking || !username.trim() || !password" type="submit">
+          {{ checking ? "Signing in…" : "Sign in" }}
         </Button>
       </form>
-
-      <p class="text-center text-xs text-faint">
-        The token is set by the studio admin (API_TOKEN on the server).
-      </p>
     </div>
   </div>
 </template>

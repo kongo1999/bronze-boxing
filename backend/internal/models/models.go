@@ -42,18 +42,43 @@ const (
 	PriorityLow    = "low"
 	PriorityNormal = "normal"
 	PriorityHigh   = "high"
+
+	RoleAdmin = "admin"
 )
 
 // Collection names.
 const (
-	CollTrainees  = "trainees"
-	CollSessions  = "sessions"
-	CollPayments  = "payments"
-	CollReminders = "reminders"
-	CollExpenses  = "expenses"
-	CollInventory = "inventory"
-	CollSales     = "sales"
+	CollTrainees     = "trainees"
+	CollSessions     = "sessions"
+	CollPayments     = "payments"
+	CollReminders    = "reminders"
+	CollExpenses     = "expenses"
+	CollInventory    = "inventory"
+	CollSales        = "sales"
+	CollUsers        = "users"
+	CollAuthSessions = "auth_sessions" // login sessions, not training sessions
 )
+
+// User is a staff login account. The admin account is bootstrapped from
+// ADMIN_USERNAME / ADMIN_PASSWORD env config on server start.
+type User struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Username     string             `bson:"username" json:"username"`
+	PasswordHash string             `bson:"passwordHash" json:"-"`
+	Role         string             `bson:"role" json:"role"`
+	CreatedAt    time.Time          `bson:"createdAt" json:"createdAt"`
+}
+
+// AuthSession is a server-side login session. The client holds the raw token;
+// we store only its SHA-256, and Mongo's TTL monitor purges expired rows.
+type AuthSession struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	TokenHash string             `bson:"tokenHash"`
+	User      primitive.ObjectID `bson:"user"`
+	Username  string             `bson:"username"`
+	ExpiresAt time.Time          `bson:"expiresAt"`
+	CreatedAt time.Time          `bson:"createdAt"`
+}
 
 type Trainee struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`

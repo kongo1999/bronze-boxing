@@ -27,19 +27,17 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 	}))
 
-	// Require a bearer token when configured (production). CORS preflight (OPTIONS)
-	// is already short-circuited above, so this only guards real requests.
-	if cfg.APIToken != "" {
-		app.Use(requireToken(cfg.APIToken))
+	// Require a login session when auth is configured (production). CORS
+	// preflight (OPTIONS) is already short-circuited above, so this only
+	// guards real requests.
+	authOn := cfg.AdminPassword != ""
+	if authOn {
+		app.Use(requireSession(store))
 	}
 
 	api := app.Group("/api")
-	registerHealth(api, store, cfg.APIToken != "")
-	// Sits behind requireToken (unlike /health), so the login screen can verify
-	// a candidate token with a cheap request before storing it.
-	api.Get("/auth/check", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"ok": true})
-	})
+	registerHealth(api, store, authOn)
+	registerAuth(api, store, authOn)
 	registerTrainees(api, store)
 	registerSessions(api, store)
 	registerPayments(api, store)

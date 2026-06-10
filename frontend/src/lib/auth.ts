@@ -1,9 +1,11 @@
-// Access-token auth for the deployed app.
+// Username/password auth for the deployed app.
 //
-// The backend enforces a shared bearer token on /api when API_TOKEN is set
-// (see backend/internal/server/auth.go). /api/health stays public and reports
-// `authRequired`, so the SPA only shows the login gate when auth is actually
-// on — local dev and demo mode never see it.
+// The backend keeps user accounts (admin seeded from ADMIN_USERNAME /
+// ADMIN_PASSWORD) and issues a session token on POST /api/auth/login; we hold
+// it in localStorage and send it as a Bearer header on every call (api.ts).
+// /api/health stays public and reports `authRequired`, so the SPA only shows
+// the login screen when auth is actually on — local dev and demo mode never
+// see it.
 
 import { isDemo } from "./demo";
 
@@ -37,14 +39,38 @@ export async function authRequired(): Promise<boolean> {
   return required;
 }
 
-// Try a candidate token against the protected /api/auth/check endpoint.
-export async function verifyToken(token: string): Promise<boolean> {
+// Exchange credentials for a session token. Returns an error message to show,
+// or null on success (token stored).
+export async function login(username: string, password: string): Promise<string | null> {
   try {
-    const res = await fetch("/api/auth/check", {
-      headers: { Authorization: `Bearer ${token}` },
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
     });
-    return res.ok;
+    const j = await res.json().catch(() => null);
+    if (!res.ok || !j?.token) {
+      return j?.error ?? "Couldn't sign in. Try again.";
+    }
+    setToken(j.token);
+    return null;
   } catch {
-    return false;
+    return "Couldn't reach the server. Try again.";
+  }
+}
+
+// Revoke the session server-side (best-effort) and drop the local token.
+export async function logout(): Promise<void> {
+  const token = getToken();
+  clearToken();
+  if (token) {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      /* session expires on its own */
+    }
   }
 }
