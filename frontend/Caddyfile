@@ -5,10 +5,15 @@
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
 
-	# API calls go to the Go service. The path is kept intact on purpose —
-	# the API serves its routes under /api, so we must NOT strip the prefix.
-	@api path /api/*
-	reverse_proxy @api api:8080
+	# Sibling handle blocks are mutually exclusive and the most specific
+	# matcher wins — /api/* must be a handle, not a bare reverse_proxy,
+	# because Caddy orders `handle` first and a matcher-less handle would
+	# otherwise swallow API calls too (file_server 405s every POST).
+	# The /api prefix is kept intact on purpose — the Go service serves its
+	# routes under /api.
+	handle /api/* {
+		reverse_proxy api:8080
+	}
 
 	# Everything else is the SPA: serve static files, fall back to index.html
 	# so client-side routes (e.g. /trainees/123) resolve.
