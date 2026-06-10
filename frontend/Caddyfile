@@ -12,6 +12,9 @@
 	# The /api prefix is kept intact on purpose — the Go service serves its
 	# routes under /api.
 	handle /api/* {
+		# Live data + auth responses: forbid any intermediary (ISP transparent
+		# caches intercept plain HTTP) or browser from caching them.
+		header Cache-Control "no-store"
 		reverse_proxy api:8080
 	}
 
