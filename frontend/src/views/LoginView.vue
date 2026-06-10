@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Lock } from "lucide-vue-next";
 import { login } from "@/lib/auth";
+import logoUrl from "@/assets/logo.png";
 import { clearCache } from "@/lib/cache";
 import Button from "@/components/ui/Button.vue";
 import { inputCls } from "@/lib/ui";
@@ -34,10 +34,8 @@ async function submit() {
 <template>
   <div class="grid min-h-dvh place-items-center px-4">
     <div class="w-full max-w-sm space-y-6">
-      <div class="space-y-2 text-center">
-        <div class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-purple/15 text-purple">
-          <Lock class="h-6 w-6" />
-        </div>
+      <div class="space-y-3 text-center">
+        <img :src="logoUrl" alt="Bronze Boxing Club" class="mx-auto h-24 w-24" />
         <h1 class="font-display text-2xl font-semibold">Bronze Boxing</h1>
         <p class="text-sm text-muted">Sign in to manage the studio.</p>
       </div>

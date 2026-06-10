@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import NavLinks from "./NavLinks.vue";
 import { getToken, logout } from "@/lib/auth";
+import logoUrl from "@/assets/logo.png";
 import {
   House,
   CalendarDays,
@@ -94,10 +95,7 @@ const rightTabs = computed(() => tabs.slice(2));
       <Menu class="h-6 w-6" />
     </button>
     <RouterLink to="/" class="flex items-center gap-2">
-      <span
-        class="grid h-7 w-7 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-sm font-bold text-purple-ink"
-        >B</span
-      >
+      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-7 w-7" />
       <span class="font-display text-base font-semibold tracking-tight">Bronze Boxing</span>
     </RouterLink>
     <RouterLink
@@ -114,10 +112,7 @@ const rightTabs = computed(() => tabs.slice(2));
     class="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-line bg-surface px-4 py-6 md:flex"
   >
     <RouterLink to="/" class="mb-8 flex items-center gap-2 px-2">
-      <span
-        class="grid h-8 w-8 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-base font-bold text-purple-ink"
-        >B</span
-      >
+      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-8" />
       <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
     </RouterLink>
     <NavLinks :items="railItems" />
@@ -225,10 +220,7 @@ const rightTabs = computed(() => tabs.slice(2));
     >
       <div class="mb-6 flex items-center justify-between px-1">
         <RouterLink to="/" class="flex items-center gap-2" @click="menuOpen = false">
-          <span
-            class="grid h-8 w-8 place-items-center rounded-lg border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple font-display text-base font-bold text-purple-ink"
-            >B</span
-          >
+          <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-8" />
           <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
         </RouterLink>
         <button type="button" aria-label="Close menu" class="text-faint hover:text-fg" @click="menuOpen = false">
