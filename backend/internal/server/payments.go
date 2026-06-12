@@ -94,6 +94,11 @@ func (h *paymentHandler) create(c *fiber.Ctx) error {
 	}
 	if in.Trainee != "" {
 		if tid, err := primitive.ObjectIDFromHex(in.Trainee); err == nil {
+			if typ == models.PaySubscription {
+				if err := checkSubscriptionOverpay(ctx, h.store, tid, in.PeriodMonth, in.Amount, nil); err != nil {
+					return err
+				}
+			}
 			p.Trainee = &tid
 			names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
 			p.TraineeName = names[tid]
@@ -140,6 +145,11 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
 		}
+		if typ == models.PaySubscription {
+			if err := checkSubscriptionOverpay(ctx, h.store, tid, in.PeriodMonth, in.Amount, &id); err != nil {
+				return err
+			}
+		}
 		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
 		set["trainee"] = tid
 		set["traineeName"] = names[tid]
@@ -179,6 +189,60 @@ func validatePeriodMonth(typ, periodMonth string) error {
 		}
 	}
 	return nil
+}
+
+// checkSubscriptionOverpay rejects a subscription payment that would push a
+// trainee's total for a period past their monthly fee — overpaying dues is
+// almost always a data-entry mistake, and silently absorbing it corrupts the
+// books. exclude is the payment being edited (so updates don't count
+// themselves); nil on create. Skipped when the trainee has no monthly fee
+// (nothing is owed, so there is nothing to overpay).
+func checkSubscriptionOverpay(ctx context.Context, store *db.Store, traineeID primitive.ObjectID,
+	periodMonth string, amount float64, exclude *primitive.ObjectID) error {
+	if periodMonth == "" {
+		return nil
+	}
+	var t models.Trainee
+	if err := store.Coll(models.CollTrainees).FindOne(ctx, bson.M{"_id": traineeID}).Decode(&t); err != nil {
+		return nil // missing trainee is handled by the caller's own validation
+	}
+	if t.MonthlyFee <= 0 {
+		return nil
+	}
+	filter := bson.M{
+		"type":        models.PaySubscription,
+		"periodMonth": periodMonth,
+		"trainee":     traineeID,
+	}
+	if exclude != nil {
+		filter["_id"] = bson.M{"$ne": *exclude}
+	}
+	cur, err := store.Coll(models.CollPayments).Find(ctx, filter)
+	if err != nil {
+		return err
+	}
+	var ps []models.Payment
+	if err := cur.All(ctx, &ps); err != nil {
+		return err
+	}
+	var paid float64
+	for _, p := range ps {
+		paid += p.Amount
+	}
+	remaining := t.MonthlyFee - paid
+	if remaining < 0 {
+		remaining = 0
+	}
+	if amount > remaining {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf(
+			"%s would overpay %s: fee %s, already paid %s, remaining %s",
+			fmtAmt(amount), periodMonth, fmtAmt(t.MonthlyFee), fmtAmt(paid), fmtAmt(remaining)))
+	}
+	return nil
+}
+
+func fmtAmt(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func (h *paymentHandler) receipt(c *fiber.Ctx) error {

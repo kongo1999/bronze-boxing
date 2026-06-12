@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from "vue";
+import { reactive, ref, computed, watch, onMounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import type { Trainee } from "@/lib/types";
+import type { Trainee, SubStatus } from "@/lib/types";
+import { money, monthLabel } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
@@ -27,8 +28,31 @@ onMounted(async () => {
   trainees.value = await api.get<Trainee[]>("/trainees");
 });
 
+// Dues context for subscription payments: what's owed, paid, and remaining
+// for the chosen trainee + period. Shown inline and used to block overpaying
+// (the server enforces the same rule; this is the friendly first line).
+const dueInfo = ref<{ due: number; paid: number } | null>(null);
+async function loadDue() {
+  dueInfo.value = null;
+  if (form.type !== "subscription" || !form.trainee || !/^\d{4}-\d{2}$/.test(form.periodMonth)) return;
+  try {
+    const subs = await api.get<SubStatus[]>(`/subscriptions?m=${form.periodMonth}`);
+    const s = subs.find((x) => x.trainee.id === form.trainee);
+    if (s) dueInfo.value = { due: s.due, paid: s.amountPaid };
+  } catch {
+    /* helper line only — the server still validates */
+  }
+}
+watch([() => form.trainee, () => form.periodMonth, () => form.type], loadDue, { immediate: true });
+
+const remaining = computed(() =>
+  dueInfo.value ? Math.max(0, dueInfo.value.due - dueInfo.value.paid) : null,
+);
+const overpaying = computed(() => remaining.value !== null && form.amount > remaining.value);
+
 async function submit() {
   if (form.amount <= 0) return (error.value = "Amount must be positive");
+  if (overpaying.value) return;
   saving.value = true;
   error.value = undefined;
   try {
@@ -82,11 +106,17 @@ async function submit() {
         <span class="mb-1 block text-xs text-faint">Period month (YYYY-MM)</span>
         <input v-model="form.periodMonth" :class="inputCls" placeholder="2026-05" />
       </label>
+      <p v-if="dueInfo" class="text-xs" :class="overpaying ? 'text-overdue' : 'text-faint'">
+        {{ monthLabel(form.periodMonth) }}: {{ money(dueInfo.due) }} fee · {{ money(dueInfo.paid) }} paid ·
+        <template v-if="remaining! > 0">{{ money(remaining!) }} remaining</template>
+        <template v-else>fully paid</template>
+        <template v-if="overpaying"> — that's more than what's owed</template>
+      </p>
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Note</span>
         <input v-model="form.note" :class="inputCls" />
       </label>
-      <Button :disabled="saving" @click="submit">{{ saving ? "Saving…" : "Record payment" }}</Button>
+      <Button :disabled="saving || overpaying" @click="submit">{{ saving ? "Saving…" : "Record payment" }}</Button>
     </Card>
   </div>
 </template>
