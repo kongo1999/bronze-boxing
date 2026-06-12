@@ -55,8 +55,8 @@
        edge, melting seamlessly into carbon black. One ambient backdrop for
        the whole app — fixed so scrolling never shears the light. */
     background:
-      radial-gradient(130% 60% at 50% -8%, oklch(0.4 0.14 298 / 0.3) 0%, transparent 60%),
-      linear-gradient(180deg, oklch(0.2 0.045 298) 0%, oklch(0.16 0.018 295) 34%, var(--color-canvas) 68%);
+      radial-gradient(130% 60% at 50% -8%, oklch(0.4 0.14 298 / 0.16) 0%, transparent 58%),
+      linear-gradient(180deg, oklch(0.172 0.026 298) 0%, oklch(0.152 0.012 295) 34%, var(--color-canvas) 68%);
     background-attachment: fixed;
     color: var(--color-fg);
     font-family: var(--font-sans);
