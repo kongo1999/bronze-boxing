@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import NavLinks from "./NavLinks.vue";
@@ -30,7 +30,7 @@ const addOpen = ref(false);
 const menuOpen = ref(false);
 
 // Signed-in state at mount is enough: the shell (and this nav) remounts on the
-// login→app transition, and sign-out leaves the shell entirely.
+// login-to-app transition, and sign-out leaves the shell entirely.
 const authed = getToken() !== null;
 async function signOut() {
   menuOpen.value = false;
@@ -95,7 +95,7 @@ const rightTabs = computed(() => tabs.slice(2));
       <Menu class="h-6 w-6" />
     </button>
     <RouterLink to="/" class="flex items-center gap-2">
-      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-7 w-7" />
+      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-7 w-auto" />
       <span class="font-display text-base font-semibold tracking-tight">Bronze Boxing</span>
     </RouterLink>
     <RouterLink
@@ -112,7 +112,7 @@ const rightTabs = computed(() => tabs.slice(2));
     class="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-line bg-surface px-4 py-6 md:flex"
   >
     <RouterLink to="/" class="mb-8 flex items-center gap-2 px-2">
-      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-8" />
+      <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-auto" />
       <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
     </RouterLink>
     <NavLinks :items="railItems" />
@@ -220,7 +220,7 @@ const rightTabs = computed(() => tabs.slice(2));
     >
       <div class="mb-6 flex items-center justify-between px-1">
         <RouterLink to="/" class="flex items-center gap-2" @click="menuOpen = false">
-          <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-8" />
+          <img :src="logoUrl" alt="Bronze Boxing Club" class="h-8 w-auto" />
           <span class="font-display text-lg font-semibold tracking-tight">Bronze Boxing</span>
         </RouterLink>
         <button type="button" aria-label="Close menu" class="text-faint hover:text-fg" @click="menuOpen = false">

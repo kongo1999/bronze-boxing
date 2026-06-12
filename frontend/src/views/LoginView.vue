@@ -35,7 +35,7 @@ async function submit() {
   <div class="grid min-h-dvh place-items-center px-4">
     <div class="w-full max-w-sm space-y-6">
       <div class="space-y-3 text-center">
-        <img :src="logoUrl" alt="Bronze Boxing Club" class="mx-auto h-24 w-24" />
+        <img :src="logoUrl" alt="Bronze Boxing Club" class="mx-auto h-28 w-auto" />
         <h1 class="font-display text-2xl font-semibold">Bronze Boxing</h1>
         <p class="text-sm text-muted">Sign in to manage the studio.</p>
       </div>
