@@ -61,9 +61,8 @@ const nextIsToday = computed(
 
 <template>
   <div class="space-y-7">
-    <!-- Hero: the badge on velvet. -->
+    <!-- Hero: the badge floating on the page's backlit canvas. -->
     <header class="relative pt-3 text-center">
-      <div aria-hidden="true" class="hero-veil pointer-events-none absolute -inset-x-8 -top-12 -bottom-4"></div>
       <div class="relative">
         <img
           :src="logoUrl"
