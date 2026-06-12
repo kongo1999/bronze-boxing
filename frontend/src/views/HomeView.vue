@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
+import logoUrl from "@/assets/logo.png";
 import {
   CalendarDays,
   Users,
@@ -40,11 +41,7 @@ const dateLabel = computed(() =>
 <template>
   <div class="space-y-6">
     <header class="pt-2 text-center">
-      <div
-        class="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-2xl border border-purple-strong/50 bg-gradient-to-b from-purple-strong to-purple text-purple-ink shadow-[var(--shadow-btn)]"
-      >
-        <span class="font-display text-3xl font-bold">B</span>
-      </div>
+      <img :src="logoUrl" alt="Bronze Boxing Club" class="mx-auto mb-3 h-20 w-auto" />
       <h1 class="font-display text-2xl font-semibold tracking-tight">Bronze Boxing</h1>
       <p class="mt-0.5 text-sm text-muted">{{ greeting }} · {{ dateLabel }}</p>
     </header>
