@@ -82,6 +82,20 @@
     letter-spacing: 0.12em;
     font-weight: 600;
   }
+  /* Home hero backdrop: a locally deepened velvet glow plus a near-subliminal
+     radial ray echo of the club badge (static; red kept at ~4% so it reads as
+     warmth, not decoration). Masked so it melts into the canvas. */
+  .hero-veil {
+    background:
+      radial-gradient(72% 100% at 50% 0%, oklch(0.42 0.15 298 / 0.16) 0%, transparent 62%),
+      repeating-conic-gradient(
+        from -90deg at 50% 20%,
+        oklch(0.5 0.19 27 / 0.042) 0deg 5deg,
+        transparent 5deg 12deg
+      );
+    -webkit-mask-image: radial-gradient(60% 80% at 50% 24%, oklch(0 0 0) 0%, transparent 72%);
+    mask-image: radial-gradient(60% 80% at 50% 24%, oklch(0 0 0) 0%, transparent 72%);
+  }
   .font-display {
     font-family: var(--font-display);
   }
