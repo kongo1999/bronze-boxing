@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embed zoneinfo so STUDIO_TZ resolves inside distroless
 
 	"github.com/joho/godotenv"
 
@@ -20,6 +21,16 @@ func main() {
 	_ = godotenv.Load()
 
 	cfg := config.Load()
+
+	// Pin the process to the studio's timezone: every time.Local computation
+	// (month ranges, "today" windows, statements) follows the gym's clock,
+	// not the container's UTC.
+	if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+		time.Local = loc
+		log.Printf("studio timezone: %s", cfg.Timezone)
+	} else {
+		log.Printf("WARNING: invalid STUDIO_TZ %q (%v) — falling back to server local time", cfg.Timezone, err)
+	}
 
 	store, err := db.Connect(cfg.MongoURI, cfg.DBName)
 	if err != nil {

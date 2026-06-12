@@ -173,10 +173,13 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
               class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 transition-colors hover:border-bronze/30"
             >
               <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span></p>
+                <p class="truncate text-sm font-medium">
+                  {{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span>
+                  <span v-if="s.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
+                </p>
                 <p class="truncate text-xs text-faint">{{ s.traineeName || "Walk-in" }} · {{ formatLongDate(s.date) }}</p>
               </div>
-              <span class="font-display text-sm tnum">{{ money(s.total) }}</span>
+              <span class="font-display text-sm tnum" :class="s.voidedAt ? 'line-through text-faint' : ''">{{ money(s.total) }}</span>
             </RouterLink>
           </li>
         </ul>

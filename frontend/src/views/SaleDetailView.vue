@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from "vue";
-import { useRoute, useRouter, RouterLink } from "vue-router";
+import { useRoute, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Undo2 } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
@@ -14,7 +14,6 @@ import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
 
 const route = useRoute();
-const router = useRouter();
 const id = route.params.id as string;
 
 const { data: sale, loading, error, reload } = useCachedAsync(`/sales/${id}`, () => api.get<Sale>(`/sales/${id}`));
@@ -46,19 +45,20 @@ async function save() {
   }
 }
 
-// ── Void — DELETE /sales/:id restocks then returns to the list ──────────────
+// ── Void — DELETE /sales/:id restocks; the record stays, marked VOID ────────
 const voiding = ref(false);
 async function voidSale() {
   if (voiding.value || !sale.value) return;
-  if (!confirm(`Void this sale? ${sale.value.qty} × ${sale.value.itemName} will be put back in stock.`)) return;
+  if (!confirm(`Void this sale? ${sale.value.qty} × ${sale.value.itemName} goes back in stock and the sale stays in the books marked VOID.`)) return;
   voiding.value = true;
   try {
     await api.del(`/sales/${id}`);
     toast("Sale voided and restocked.", "success");
-    router.push("/inventory");
+    await reload();
   } catch (e) {
-    voiding.value = false;
     toast(e instanceof Error && e.message ? e.message : "Couldn't void sale.", "error");
+  } finally {
+    voiding.value = false;
   }
 }
 </script>
@@ -76,10 +76,13 @@ async function voidSale() {
       <Card class="p-4">
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
-            <h1 class="font-display text-xl font-semibold">{{ sale.itemName }}</h1>
+            <h1 class="font-display text-xl font-semibold">
+              {{ sale.itemName }}
+              <span v-if="sale.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-xs font-semibold uppercase tracking-wide text-overdue">Void</span>
+            </h1>
             <p class="text-sm text-muted">{{ sale.traineeName || "Walk-in" }} · {{ formatLongDate(sale.date) }}</p>
           </div>
-          <span class="font-display text-lg tnum">{{ money(sale.total) }}</span>
+          <span class="font-display text-lg tnum" :class="sale.voidedAt ? 'line-through text-faint' : ''">{{ money(sale.total) }}</span>
         </div>
 
         <div class="mt-4 grid grid-cols-2 gap-3">
@@ -93,7 +96,10 @@ async function voidSale() {
           </div>
         </div>
 
-        <div v-if="!editing" class="mt-4 flex gap-2">
+        <p v-if="sale.voidedAt" class="mt-4 text-sm text-faint">
+          Voided {{ formatLongDate(sale.voidedAt) }} — kept in the books, stock restored, no longer counts as income.
+        </p>
+        <div v-else-if="!editing" class="mt-4 flex gap-2">
           <Button size="sm" @click="startEdit"><Pencil class="h-4 w-4" /> Edit sale</Button>
           <button
             :disabled="voiding"

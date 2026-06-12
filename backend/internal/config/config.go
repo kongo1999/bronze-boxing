@@ -12,6 +12,7 @@ type Config struct {
 	Currency      string
 	AdminUsername string
 	AdminPassword string
+	Timezone      string
 }
 
 func Load() Config {
@@ -25,6 +26,9 @@ func Load() Config {
 		// production: the admin account is created/synced from these on boot.
 		AdminUsername: env("ADMIN_USERNAME", "admin"),
 		AdminPassword: env("ADMIN_PASSWORD", ""),
+		// The studio's wall-clock timezone: month boundaries for revenue,
+		// dues and statements are computed in THIS zone, not the server's.
+		Timezone: env("STUDIO_TZ", "Asia/Beirut"),
 	}
 }
 

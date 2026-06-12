@@ -57,6 +57,7 @@ const (
 	CollSales        = "sales"
 	CollUsers        = "users"
 	CollAuthSessions = "auth_sessions" // login sessions, not training sessions
+	CollAudit        = "audit_log"     // append-only money audit trail
 )
 
 // User is a staff login account. The admin account is bootstrapped from
@@ -125,6 +126,8 @@ type Payment struct {
 	Note        string              `bson:"note,omitempty" json:"note,omitempty"`
 	SaleID      *primitive.ObjectID `bson:"saleId,omitempty" json:"saleId,omitempty"`
 	CreatedAt   time.Time           `bson:"createdAt" json:"createdAt"`
+	VoidedAt    *time.Time          `bson:"voidedAt,omitempty" json:"voidedAt,omitempty"`
+	VoidReason  string              `bson:"voidReason,omitempty" json:"voidReason,omitempty"`
 }
 
 type Reminder struct {
@@ -137,12 +140,14 @@ type Reminder struct {
 }
 
 type Expense struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Amount    float64            `bson:"amount" json:"amount"`
-	Category  string             `bson:"category" json:"category"`
-	Note      string             `bson:"note,omitempty" json:"note,omitempty"`
-	Date      time.Time          `bson:"date" json:"date"`
-	CreatedAt time.Time          `bson:"createdAt" json:"createdAt"`
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Amount     float64            `bson:"amount" json:"amount"`
+	Category   string             `bson:"category" json:"category"`
+	Note       string             `bson:"note,omitempty" json:"note,omitempty"`
+	Date       time.Time          `bson:"date" json:"date"`
+	CreatedAt  time.Time          `bson:"createdAt" json:"createdAt"`
+	VoidedAt   *time.Time         `bson:"voidedAt,omitempty" json:"voidedAt,omitempty"`
+	VoidReason string             `bson:"voidReason,omitempty" json:"voidReason,omitempty"`
 }
 
 type InventoryItem struct {
@@ -170,4 +175,19 @@ type Sale struct {
 	Date        time.Time           `bson:"date" json:"date"`
 	PaymentID   *primitive.ObjectID `bson:"paymentId,omitempty" json:"paymentId,omitempty"`
 	CreatedAt   time.Time           `bson:"createdAt" json:"createdAt"`
+	VoidedAt    *time.Time          `bson:"voidedAt,omitempty" json:"voidedAt,omitempty"`
+	VoidReason  string              `bson:"voidReason,omitempty" json:"voidReason,omitempty"`
+}
+
+// AuditEntry is one immutable line in the money audit trail: every edit or
+// void of a payment, expense, or sale records what it looked like before and
+// after, and when. Entries are append-only — nothing updates or deletes them.
+type AuditEntry struct {
+	ID     primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Entity string             `bson:"entity" json:"entity"` // payment | expense | sale
+	Ref    primitive.ObjectID `bson:"ref" json:"ref"`
+	Action string             `bson:"action" json:"action"` // update | void
+	Before any                `bson:"before,omitempty" json:"before,omitempty"`
+	After  any                `bson:"after,omitempty" json:"after,omitempty"`
+	At     time.Time          `bson:"at" json:"at"`
 }

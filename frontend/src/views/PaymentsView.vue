@@ -61,20 +61,23 @@ function showCached(): boolean {
 // On month change/nav: render cache instantly (skeleton only when nothing cached), then revalidate.
 watch(month, () => { loading.value = !showCached(); load(); }, { immediate: true });
 
-const revenue = computed(() => payments.value.reduce((s, p) => s + p.amount, 0));
+const revenue = computed(() => payments.value.filter((p) => !p.voidedAt).reduce((s, p) => s + p.amount, 0));
 const paidCount = computed(() => subs.value.filter((s) => s.state === "paid").length);
 
 const toneMap: Record<string, "paid" | "partial" | "overdue"> = { paid: "paid", partial: "partial", unpaid: "overdue" };
 const labelMap: Record<string, string> = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" };
 const typeLabel: Record<string, string> = { subscription: "Subscription", private: "Private session", dropin: "Drop-in", sale: "Shop sale", other: "Other" };
 
-async function removePayment(id: string) {
-  if (!confirm("Delete this payment?")) return;
+// Voids, not deletes: the record stays in the books marked VOID and stops
+// counting toward revenue and dues.
+async function voidPayment(id: string) {
+  if (!confirm("Void this payment? It stays in the books marked VOID and stops counting.")) return;
   try {
     await api.del(`/payments/${id}`);
     load();
+    toast("Payment voided.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't delete payment.", "error");
+    toast(e instanceof Error && e.message ? e.message : "Couldn't void payment.", "error");
   }
 }
 
@@ -183,16 +186,21 @@ async function exportCsv() {
         </div>
         <EmptyState v-if="payments.length === 0" :icon="Receipt" title="No payments this month" description="Cash you collect will show up here." />
         <ul v-else class="space-y-2">
-          <li v-for="p in payments" :key="p.id" class="rounded-xl border border-line bg-surface">
+          <li v-for="p in payments" :key="p.id" class="rounded-xl border border-line bg-surface" :class="p.voidedAt ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3 px-3 py-2.5">
               <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{{ p.traineeName || "—" }}</p>
+                <p class="truncate text-sm font-medium">
+                  {{ p.traineeName || "—" }}
+                  <span v-if="p.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
+                </p>
                 <p class="truncate text-xs text-faint">{{ typeLabel[p.type] ?? p.type }}{{ p.periodMonth ? ` · ${monthLabel(p.periodMonth)}` : "" }} · {{ formatLongDate(p.date) }}</p>
               </div>
               <div class="flex shrink-0 items-center gap-2">
-                <span class="font-display text-sm tnum">{{ money(p.amount) }}</span>
-                <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" :aria-label="`Edit payment`" @click="openEdit(p)"><Pencil class="h-4 w-4" /></button>
-                <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete payment" @click="removePayment(p.id)">×</button>
+                <span class="font-display text-sm tnum" :class="p.voidedAt ? 'line-through text-faint' : ''">{{ money(p.amount) }}</span>
+                <template v-if="!p.voidedAt">
+                  <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" :aria-label="`Edit payment`" @click="openEdit(p)"><Pencil class="h-4 w-4" /></button>
+                  <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void payment" @click="voidPayment(p.id)">×</button>
+                </template>
               </div>
             </div>
             <div v-if="editingId === p.id" class="space-y-2 border-t border-line px-3 py-3">

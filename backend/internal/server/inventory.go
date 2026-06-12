@@ -171,9 +171,9 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 	if item.Stock < in.Qty {
 		return fiber.NewError(fiber.StatusBadRequest, "not enough stock")
 	}
-	unit := item.Price
+	unit := round2(item.Price)
 	if in.UnitPrice != nil {
-		unit = *in.UnitPrice
+		unit = round2(*in.UnitPrice)
 	}
 	now := time.Now()
 	sale := models.Sale{
@@ -181,7 +181,7 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 		ItemName:  item.Name,
 		Qty:       in.Qty,
 		UnitPrice: unit,
-		Total:     unit * float64(in.Qty),
+		Total:     round2(unit * float64(in.Qty)),
 		Date:      now,
 		CreatedAt: now,
 	}
@@ -254,8 +254,10 @@ func (h *inventoryHandler) getSale(c *fiber.Ctx) error {
 	return c.JSON(sale)
 }
 
-// voidSale reverses a sale: it puts the sold quantity back into stock and
-// deletes the sale record (so it no longer counts as shop income).
+// voidSale reverses a sale the bookkeeping way: the record stays forever,
+// marked void (so it no longer counts as shop income), and the sold quantity
+// goes back into stock. The void flag is set atomically on a live record
+// first, so a double-void can never restock twice.
 func (h *inventoryHandler) voidSale(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -267,15 +269,30 @@ func (h *inventoryHandler) voidSale(c *fiber.Ctx) error {
 	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&sale); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "sale not found")
 	}
+	if sale.VoidedAt != nil {
+		return fiber.NewError(fiber.StatusConflict, "sale is already voided")
+	}
+	now := time.Now()
+	reason := c.Query("reason")
+	upd, err := h.store.Coll(models.CollSales).UpdateOne(ctx,
+		bson.M{"_id": id, "voidedAt": nil},
+		bson.M{"$set": bson.M{"voidedAt": now, "voidReason": reason}})
+	if err != nil {
+		return err
+	}
+	if upd.ModifiedCount == 0 {
+		return fiber.NewError(fiber.StatusConflict, "sale is already voided")
+	}
 	if _, err := h.store.Coll(models.CollInventory).UpdateOne(ctx,
 		bson.M{"_id": sale.Item},
-		bson.M{"$inc": bson.M{"stock": sale.Qty}, "$set": bson.M{"updatedAt": time.Now()}}); err != nil {
+		bson.M{"$inc": bson.M{"stock": sale.Qty}, "$set": bson.M{"updatedAt": now}}); err != nil {
 		return err
 	}
-	if _, err := h.store.Coll(models.CollSales).DeleteOne(ctx, bson.M{"_id": id}); err != nil {
-		return err
-	}
-	return c.JSON(fiber.Map{"ok": true, "restocked": sale.Qty})
+	after := sale
+	after.VoidedAt = &now
+	after.VoidReason = reason
+	writeAudit(ctx, h.store, "sale", id, "void", sale, after)
+	return c.JSON(fiber.Map{"ok": true, "voided": true, "restocked": sale.Qty})
 }
 
 type saleCorrectionInput struct {
@@ -301,6 +318,9 @@ func (h *inventoryHandler) correctSale(c *fiber.Ctx) error {
 	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&sale); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "sale not found")
 	}
+	if sale.VoidedAt != nil {
+		return fiber.NewError(fiber.StatusConflict, "sale is voided and can no longer be corrected")
+	}
 	set := bson.M{}
 	if in.Qty != nil {
 		if *in.Qty <= 0 {
@@ -319,7 +339,7 @@ func (h *inventoryHandler) correctSale(c *fiber.Ctx) error {
 			}
 		}
 		set["qty"] = *in.Qty
-		set["total"] = sale.UnitPrice * float64(*in.Qty)
+		set["total"] = round2(sale.UnitPrice * float64(*in.Qty))
 	}
 	if in.Trainee != nil {
 		if *in.Trainee == "" {
@@ -341,6 +361,9 @@ func (h *inventoryHandler) correctSale(c *fiber.Ctx) error {
 	var out models.Sale
 	if err := h.store.Coll(models.CollSales).FindOne(ctx, bson.M{"_id": id}).Decode(&out); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "sale not found")
+	}
+	if len(set) > 0 {
+		writeAudit(ctx, h.store, "sale", id, "update", sale, out)
 	}
 	return c.JSON(out)
 }

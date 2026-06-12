@@ -38,6 +38,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      STUDIO_TZ: ${STUDIO_TZ:-Asia/Beirut}
     depends_on:
       mongo:
         condition: service_healthy

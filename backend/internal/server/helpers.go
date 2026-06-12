@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"time"
 
@@ -58,6 +59,20 @@ func defaultStr(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// round2 normalizes money to 2 decimal places at every write boundary, so
+// float drift can never accumulate into the books.
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+// notVoided narrows a money query to live (non-voided) records. In Mongo,
+// {field: nil} matches both missing and null, so legacy documents written
+// before voiding existed are included.
+func notVoided(filter bson.M) bson.M {
+	filter["voidedAt"] = nil
+	return filter
 }
 
 // deref helpers for optional (pointer) JSON fields — nil means "not sent".

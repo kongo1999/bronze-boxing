@@ -52,6 +52,8 @@ export interface Payment {
   note?: string;
   saleId?: string;
   createdAt: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface Reminder {
@@ -70,6 +72,8 @@ export interface Expense {
   note?: string;
   date: string;
   createdAt: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface InventoryItem {
@@ -97,6 +101,8 @@ export interface Sale {
   date: string;
   paymentId?: string;
   createdAt: string;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface SubStatus {

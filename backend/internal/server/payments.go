@@ -74,6 +74,7 @@ func (h *paymentHandler) create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
 	}
+	in.Amount = round2(in.Amount)
 	if in.Amount <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
 	}
@@ -123,12 +124,21 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
 	}
+	in.Amount = round2(in.Amount)
 	if in.Amount <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
 	}
 	typ := defaultStr(in.Type, models.PayOther)
 	if err := validatePeriodMonth(typ, in.PeriodMonth); err != nil {
 		return err
+	}
+	// Voided records are frozen history — corrections happen on live ones.
+	var prev models.Payment
+	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&prev); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payment not found")
+	}
+	if prev.VoidedAt != nil {
+		return fiber.NewError(fiber.StatusConflict, "payment is voided and can no longer be edited")
 	}
 	set := bson.M{
 		"amount":      in.Amount,
@@ -164,9 +174,12 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
 		return fiber.NewError(fiber.StatusNotFound, "payment not found")
 	}
+	writeAudit(ctx, h.store, "payment", id, "update", prev, p)
 	return c.JSON(p)
 }
 
+// remove voids a payment rather than deleting it: the record stays in the
+// books forever, marked void, and stops counting toward revenue and dues.
 func (h *paymentHandler) remove(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -174,10 +187,25 @@ func (h *paymentHandler) remove(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if _, err := h.store.Coll(models.CollPayments).DeleteOne(ctx, bson.M{"_id": id}); err != nil {
+	var prev models.Payment
+	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&prev); err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "payment not found")
+	}
+	if prev.VoidedAt != nil {
+		return fiber.NewError(fiber.StatusConflict, "payment is already voided")
+	}
+	now := time.Now()
+	reason := c.Query("reason")
+	if _, err := h.store.Coll(models.CollPayments).UpdateOne(ctx,
+		bson.M{"_id": id, "voidedAt": nil},
+		bson.M{"$set": bson.M{"voidedAt": now, "voidReason": reason}}); err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"ok": true})
+	after := prev
+	after.VoidedAt = &now
+	after.VoidReason = reason
+	writeAudit(ctx, h.store, "payment", id, "void", prev, after)
+	return c.JSON(fiber.Map{"ok": true, "voided": true})
 }
 
 // validatePeriodMonth ensures a subscription payment's period is a real YYYY-MM,
@@ -209,11 +237,11 @@ func checkSubscriptionOverpay(ctx context.Context, store *db.Store, traineeID pr
 	if t.MonthlyFee <= 0 {
 		return nil
 	}
-	filter := bson.M{
+	filter := notVoided(bson.M{
 		"type":        models.PaySubscription,
 		"periodMonth": periodMonth,
 		"trainee":     traineeID,
-	}
+	})
 	if exclude != nil {
 		filter["_id"] = bson.M{"$ne": *exclude}
 	}
@@ -279,8 +307,12 @@ func (h *paymentHandler) export(c *fiber.Ctx) error {
 	}
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Note"})
+	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Note", "Status"})
 	for _, p := range payments {
+		status := ""
+		if p.VoidedAt != nil {
+			status = "VOID"
+		}
 		_ = w.Write([]string{
 			p.Date.Format("2006-01-02"),
 			p.TraineeName,
@@ -288,6 +320,7 @@ func (h *paymentHandler) export(c *fiber.Ctx) error {
 			p.PeriodMonth,
 			strconv.FormatFloat(p.Amount, 'f', 2, 64),
 			p.Note,
+			status,
 		})
 	}
 	w.Flush()
@@ -323,7 +356,7 @@ func computeMonthRevenue(ctx context.Context, store *db.Store, month string) (fl
 	if err != nil {
 		return 0, err
 	}
-	cur, err := store.Coll(models.CollPayments).Find(ctx, bson.M{"date": bson.M{"$gte": start, "$lt": end}})
+	cur, err := store.Coll(models.CollPayments).Find(ctx, notVoided(bson.M{"date": bson.M{"$gte": start, "$lt": end}}))
 	if err != nil {
 		return 0, err
 	}
@@ -335,7 +368,7 @@ func computeMonthRevenue(ctx context.Context, store *db.Store, month string) (fl
 	for _, p := range ps {
 		total += p.Amount
 	}
-	return total, nil
+	return round2(total), nil
 }
 
 // computeSubStatuses builds per-trainee subscription dues/paid/state for a month.
@@ -352,11 +385,11 @@ func computeSubStatuses(ctx context.Context, store *db.Store, month string) ([]s
 		return nil, err
 	}
 
-	// Sum subscription payments for this period, by trainee.
-	pcur, err := store.Coll(models.CollPayments).Find(ctx, bson.M{
+	// Sum subscription payments for this period, by trainee (live ones only).
+	pcur, err := store.Coll(models.CollPayments).Find(ctx, notVoided(bson.M{
 		"type":        models.PaySubscription,
 		"periodMonth": month,
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}

@@ -129,11 +129,13 @@ const sales: Sale[] = [
 ];
 
 // ── Computed (mirror the Go backend) ─────────────────────────────────────────
+// Voided records stay in lists but never count toward money totals.
+const live = <T extends { voidedAt?: string }>(arr: T[]) => arr.filter((x) => !x.voidedAt);
 function subscriptions(): SubStatus[] {
   return trainees
     .filter((t) => t.status === "active" && t.monthlyFee > 0)
     .map((t) => {
-      const paid = payments
+      const paid = live(payments)
         .filter((p) => p.type === "subscription" && p.periodMonth === MONTH && p.trainee === t.id)
         .reduce((s, p) => s + p.amount, 0);
       const state = paid >= t.monthlyFee ? "paid" : paid > 0 ? "partial" : "unpaid";
@@ -143,11 +145,11 @@ function subscriptions(): SubStatus[] {
 function financials(): Financials {
   let income = 0;
   const byType: Record<string, number> = {};
-  for (const p of payments) { income += p.amount; byType[p.type] = (byType[p.type] ?? 0) + p.amount; }
-  for (const s of sales) { if (!s.paymentId) { income += s.total; byType.sale = (byType.sale ?? 0) + s.total; } }
+  for (const p of live(payments)) { income += p.amount; byType[p.type] = (byType[p.type] ?? 0) + p.amount; }
+  for (const s of live(sales)) { if (!s.paymentId) { income += s.total; byType.sale = (byType.sale ?? 0) + s.total; } }
   let outgoings = 0;
   const byCategory: Record<string, number> = {};
-  for (const e of expenses) { outgoings += e.amount; byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount; }
+  for (const e of live(expenses)) { outgoings += e.amount; byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount; }
   return { income, outgoings, net: income - outgoings, byType, byCategory, from: iso(-now.getDate() + 1, 0), to: iso(31, 0) };
 }
 function dashboard(): Dashboard {
@@ -159,7 +161,7 @@ function dashboard(): Dashboard {
   const weekReminders = reminders.filter((r) => { const d = new Date(r.dueDate); return d >= new Date(todayStr) && d < weekEnd; });
   return {
     today: nowISO, month: MONTH,
-    monthRevenue: payments.reduce((s, p) => s + p.amount, 0),
+    monthRevenue: live(payments).reduce((s, p) => s + p.amount, 0),
     activeTrainees: trainees.filter((t) => t.status === "active").length,
     overdueCount: overdue.length, todaySessions, weekReminders, overdueSubscriptions: overdue,
   };
@@ -182,6 +184,15 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   if (path === "/health") return r({ status: "ok", db: true });
   if (path === "/dashboard") return r(dashboard());
   if (path === "/financials") return r(financials());
+  if (path === "/financials/export") {
+    const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const rows: string[] = [];
+    for (const p of payments) rows.push([p.date.slice(0, 10), "payment", p.traineeName ?? "", p.type, p.note ?? "", p.amount.toFixed(2), "0.00", p.voidedAt ? "VOID" : ""].map(esc).join(","));
+    for (const s of sales) rows.push([s.date.slice(0, 10), "sale", s.itemName, "sale", "", s.total.toFixed(2), "0.00", s.voidedAt ? "VOID" : ""].map(esc).join(","));
+    for (const e of expenses) rows.push([e.date.slice(0, 10), "expense", e.category, "expense", e.note ?? "", "0.00", e.amount.toFixed(2), e.voidedAt ? "VOID" : ""].map(esc).join(","));
+    const f = financials();
+    return r(["Date,Kind,Detail,Type,Note,In,Out,Status", ...rows.sort(), "", `,,,,Total income,${f.income.toFixed(2)},,`, `,,,,Total outgoings,,${f.outgoings.toFixed(2)},`, `,,,,Net,${f.net.toFixed(2)},,`].join("\n"));
+  }
   if (path === "/subscriptions") return r(subscriptions());
 
   if (path === "/search") {
@@ -241,8 +252,8 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     }
     const id = seg[1];
     if (seg[2] === "receipt") return r({ studio: "Bronze Boxing", payment: payments.find((p) => p.id === id), issued: nowISO });
-    if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p) { Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; } return r(p); }
-    if (method === "DELETE") { rm(payments, id); return r({ ok: true }); }
+    if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; } return r(p); }
+    if (method === "DELETE") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) p.voidedAt = nowISO; return r({ ok: true, voided: true }); }
   }
 
   // /reminders
@@ -263,8 +274,8 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       return r(expenses);
     }
     const id = seg[1];
-    if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e) Object.assign(e, body); return r(e); }
-    if (method === "DELETE") { rm(expenses, id); return r({ ok: true }); }
+    if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) Object.assign(e, body); return r(e); }
+    if (method === "DELETE") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) e.voidedAt = nowISO; return r({ ok: true, voided: true }); }
   }
 
   // /inventory + /sales
@@ -293,12 +304,12 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     const id = seg[1];
     if (method === "DELETE") {
       const sale = sales.find((x) => x.id === id);
-      if (sale) { const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; rm(sales, id); }
-      return r({ ok: true, restocked: sale?.qty ?? 0 });
+      if (sale && !sale.voidedAt) { const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; sale.voidedAt = nowISO; }
+      return r({ ok: true, voided: true, restocked: sale?.qty ?? 0 });
     }
     if (method === "PUT") {
       const sale = sales.find((x) => x.id === id);
-      if (sale) {
+      if (sale && !sale.voidedAt) {
         if (typeof body.qty === "number") {
           const it = inventory.find((x) => x.id === sale.item);
           if (it) it.stock = Math.max(0, it.stock - (body.qty - sale.qty));

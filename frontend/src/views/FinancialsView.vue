@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
-import { Plus, Pencil } from "lucide-vue-next";
+import { Plus, Pencil, Download } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import type { Financials, Expense } from "@/lib/types";
@@ -76,12 +76,32 @@ async function addExpense() {
     busy.value = false;
   }
 }
-async function removeExpense(id: string) {
+// Voids, not deletes: the record stays in the books marked VOID and stops
+// counting toward outgoings.
+async function voidExpense(id: string) {
+  if (!confirm("Void this expense? It stays in the books marked VOID and stops counting.")) return;
   try {
     await api.del(`/expenses/${id}`);
     load();
+    toast("Expense voided.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't delete expense.", "error");
+    toast(e instanceof Error && e.message ? e.message : "Couldn't void expense.", "error");
+  }
+}
+
+// Full month ledger (payments + sales + expenses + totals) as CSV, fetched
+// through the api client so the auth header rides along.
+async function exportStatement() {
+  try {
+    const csv = await api.get<string>(`/financials/export?m=${month.value}`);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `statement-${month.value}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast(e instanceof Error && e.message ? e.message : "Couldn't export statement.", "error");
   }
 }
 
@@ -145,6 +165,10 @@ const catLabel: Record<string, string> = {
         </span>
       </Card>
 
+      <button class="inline-flex items-center gap-1 px-1 text-sm font-medium text-bronze hover:underline" @click="exportStatement">
+        <Download class="h-3.5 w-3.5" /> Monthly statement (CSV)
+      </button>
+
       <section class="space-y-2">
         <div class="flex items-center justify-between px-1">
           <h2 class="label-eyebrow text-[0.625rem] text-faint">Outgoings · {{ monthLabel(month) }}</h2>
@@ -163,16 +187,21 @@ const catLabel: Record<string, string> = {
         </Card>
 
         <ul class="space-y-2">
-          <li v-for="e in expenses" :key="e.id" class="rounded-xl border border-line bg-surface">
+          <li v-for="e in expenses" :key="e.id" class="rounded-xl border border-line bg-surface" :class="e.voidedAt ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3 px-3 py-2.5">
               <div class="min-w-0">
-                <p class="text-sm font-medium">{{ catLabel[e.category] ?? e.category }}</p>
+                <p class="text-sm font-medium">
+                  {{ catLabel[e.category] ?? e.category }}
+                  <span v-if="e.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
+                </p>
                 <p v-if="e.note" class="truncate text-xs text-faint">{{ e.note }}</p>
               </div>
               <div class="flex shrink-0 items-center gap-2">
-                <span class="font-display text-sm text-overdue tnum">−{{ money(e.amount) }}</span>
-                <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit expense" @click="openEditExpense(e)"><Pencil class="h-4 w-4" /></button>
-                <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Delete expense" @click="removeExpense(e.id)">×</button>
+                <span class="font-display text-sm text-overdue tnum" :class="e.voidedAt ? 'line-through text-faint' : ''">−{{ money(e.amount) }}</span>
+                <template v-if="!e.voidedAt">
+                  <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit expense" @click="openEditExpense(e)"><Pencil class="h-4 w-4" /></button>
+                  <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void expense" @click="voidExpense(e.id)">×</button>
+                </template>
               </div>
             </div>
             <div v-if="editingId === e.id" class="space-y-2 border-t border-line px-3 py-3">
