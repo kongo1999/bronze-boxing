@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { authRequired, getToken } from "@/lib/auth";
+import { authRequired, isAuthed } from "@/lib/auth";
 
 const routes = [
   { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
@@ -39,7 +39,7 @@ const router = createRouter({
 // the server). Local dev and demo mode skip this entirely.
 router.beforeEach(async (to) => {
   if (to.name === "login") return true;
-  if ((await authRequired()) && !getToken()) {
+  if ((await authRequired()) && !(await isAuthed())) {
     return { name: "login", query: { to: to.fullPath } };
   }
   return true;

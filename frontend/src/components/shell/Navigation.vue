@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import NavLinks from "./NavLinks.vue";
-import { getToken, logout } from "@/lib/auth";
+import { isLoggedIn, logout } from "@/lib/auth";
 import logoUrl from "@/assets/logo.png";
 import {
   House,
@@ -30,8 +30,9 @@ const addOpen = ref(false);
 const menuOpen = ref(false);
 
 // Signed-in state at mount is enough: the shell (and this nav) remounts on the
-// login-to-app transition, and sign-out leaves the shell entirely.
-const authed = getToken() !== null;
+// login-to-app transition, and sign-out leaves the shell entirely. The router
+// guard resolves the session before the shell renders, so this is populated.
+const authed = isLoggedIn();
 async function signOut() {
   menuOpen.value = false;
   await logout();

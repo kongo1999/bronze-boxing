@@ -1,7 +1,7 @@
 // Tiny typed fetch client. Dev server proxies /api -> Go server (:8080).
 
 import { isDemo, demoResolve } from "./demo";
-import { getToken, clearToken } from "./auth";
+import { markLoggedOut } from "./auth";
 
 const BASE = "/api";
 
@@ -10,23 +10,23 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (isDemo) {
     return demoResolve<T>(path, (opts.method ?? "GET").toUpperCase(), opts.body ?? null);
   }
-  const token = getToken();
   const res = await fetch(BASE + path, {
+    // Same-origin: the httpOnly session cookie rides along automatically.
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     },
     ...opts,
   });
-  // Token missing/revoked → drop it and send the user to the login gate.
-  // (Full navigation, not router.push, to avoid an import cycle with the router.)
+  // Session missing/revoked → drop local state and send the user to the login
+  // gate. (Full navigation, not router.push, to avoid an import cycle.)
   if (res.status === 401) {
-    clearToken();
+    markLoggedOut();
     if (!window.location.pathname.startsWith("/login")) {
       window.location.assign("/login");
     }
-    throw new Error("Signed out — enter the access token.");
+    throw new Error("Signed out — please sign in again.");
   }
   if (!res.ok) {
     let msg = res.statusText;

@@ -30,6 +30,11 @@ import (
 
 const sessionTTL = 30 * 24 * time.Hour
 
+// Name of the httpOnly session cookie the browser carries. The raw token is
+// never exposed to JS (localStorage is XSS-readable); API/CLI clients may still
+// send it as a Bearer header instead.
+const sessionCookieName = "bb_session"
+
 // dummyHash keeps login timing flat when the username doesn't exist.
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("not-a-real-password"), bcrypt.DefaultCost)
 
@@ -93,8 +98,14 @@ func EnsureAuth(ctx context.Context, store *db.Store, username, password string)
 // exempted there); logout and me run behind it.
 func registerAuth(r fiber.Router, store *db.Store, enabled bool) {
 	g := r.Group("/auth")
-	// Brute-force damper: 10 login attempts per IP per minute.
-	g.Post("/login", limiter.New(limiter.Config{Max: 10, Expiration: time.Minute}), loginHandler(store, enabled))
+	// Brute-force damper: 10 login attempts per client IP per minute. Keyed on
+	// the real client IP (see clientIP) so the whole studio isn't throttled as
+	// one bucket behind the reverse proxy.
+	g.Post("/login", limiter.New(limiter.Config{
+		Max:          10,
+		Expiration:   time.Minute,
+		KeyGenerator: clientIP,
+	}), loginHandler(store, enabled))
 	g.Post("/logout", logoutHandler(store))
 	g.Get("/me", meHandler())
 }
@@ -107,6 +118,7 @@ func loginHandler(store *db.Store, enabled bool) fiber.Handler {
 		var in struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
+			Remember bool   `json:"remember"`
 		}
 		if err := c.BodyParser(&in); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid body")
@@ -144,6 +156,21 @@ func loginHandler(store *db.Store, enabled bool) fiber.Handler {
 		}); err != nil {
 			return err
 		}
+		// Hand the browser an httpOnly cookie so JS never holds the token.
+		// "Remember me" → a persistent cookie; otherwise a session cookie that
+		// dies with the browser. Secure turns on automatically behind HTTPS.
+		ck := &fiber.Cookie{
+			Name:     sessionCookieName,
+			Value:    token,
+			Path:     "/",
+			HTTPOnly: true,
+			Secure:   c.Get(fiber.HeaderXForwardedProto) == "https",
+			SameSite: "Lax",
+		}
+		if in.Remember {
+			ck.Expires = time.Now().Add(sessionTTL)
+		}
+		c.Cookie(ck)
 		return c.JSON(fiber.Map{"token": token, "user": u})
 	}
 }
@@ -152,9 +179,18 @@ func logoutHandler(store *db.Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		ctx, cancel := reqCtx()
 		defer cancel()
-		if raw := bearerToken(c); raw != "" {
+		if raw := sessionToken(c); raw != "" {
 			_, _ = store.Coll(models.CollAuthSessions).DeleteOne(ctx, bson.M{"tokenHash": hashToken(raw)})
 		}
+		// Expire the cookie on the client too.
+		c.Cookie(&fiber.Cookie{
+			Name:     sessionCookieName,
+			Value:    "",
+			Path:     "/",
+			HTTPOnly: true,
+			Expires:  time.Now().Add(-time.Hour),
+			MaxAge:   -1,
+		})
 		return c.JSON(fiber.Map{"ok": true})
 	}
 }
@@ -177,7 +213,7 @@ func requireSession(store *db.Store) fiber.Handler {
 		case "/api/health", "/api/auth/login":
 			return c.Next()
 		}
-		raw := bearerToken(c)
+		raw := sessionToken(c)
 		if raw == "" {
 			return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
 		}
@@ -190,6 +226,13 @@ func requireSession(store *db.Store) fiber.Handler {
 		}).Decode(&s); err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
 		}
+		// Sliding expiration: keep a regularly-used session alive so an active
+		// admin is never abruptly signed out, while idle sessions still lapse
+		// via the TTL index. Renew at most ~once/day to avoid a write per call.
+		if time.Until(s.ExpiresAt) < sessionTTL-24*time.Hour {
+			_, _ = store.Coll(models.CollAuthSessions).UpdateOne(ctx,
+				bson.M{"_id": s.ID}, bson.M{"$set": bson.M{"expiresAt": time.Now().Add(sessionTTL)}})
+		}
 		c.Locals("session", s)
 		return c.Next()
 	}
@@ -197,6 +240,27 @@ func requireSession(store *db.Store) fiber.Handler {
 
 func bearerToken(c *fiber.Ctx) string {
 	return strings.TrimPrefix(c.Get("Authorization"), "Bearer ")
+}
+
+// sessionToken reads the session from the httpOnly cookie (browser) and falls
+// back to the Authorization: Bearer header (API/CLI clients).
+func sessionToken(c *fiber.Ctx) string {
+	if v := c.Cookies(sessionCookieName); v != "" {
+		return v
+	}
+	return bearerToken(c)
+}
+
+// clientIP is the real client IP even behind the reverse proxy. Caddy appends
+// the connecting client's IP as the LAST X-Forwarded-For entry, so the
+// rightmost value is authoritative — a client-sent XFF prefix can't spoof it
+// because Caddy is the only ingress to this service.
+func clientIP(c *fiber.Ctx) string {
+	if xff := c.Get(fiber.HeaderXForwardedFor); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
+	}
+	return c.IP()
 }
 
 func hashToken(raw string) string {

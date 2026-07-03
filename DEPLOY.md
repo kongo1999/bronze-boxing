@@ -104,10 +104,16 @@ For a real studio, skip this and enter data through the UI.
   `ADMIN_PASSWORD` in `.env` — the env file is the source of truth for that
   one account.
 - The SPA shows a sign-in screen (username + password). `POST /api/auth/login`
-  (rate-limited per IP) exchanges credentials for a 30-day session token, which
-  the browser stores and sends as a Bearer header on every call. Sessions are
-  server-side (hashed tokens in `auth_sessions`, auto-expired by Mongo TTL), so
-  sign-out and password rotation revoke them for real.
+  (rate-limited per real client IP — the rightmost `X-Forwarded-For` set by
+  Caddy, so it can't be spoofed) exchanges credentials for a session. The token
+  is delivered to the browser as an **`HttpOnly` cookie** (`SameSite=Lax`,
+  `Secure` auto-enabled under HTTPS) — JavaScript never sees it, so an XSS bug
+  can't steal it. **"Remember me"** picks a persistent 30-day cookie vs a
+  session cookie that dies with the browser. Sessions are server-side (hashed
+  tokens in `auth_sessions`, auto-expired by Mongo TTL) and **slide** — an
+  actively used session renews so admins aren't logged out mid-use — so sign-out
+  and password rotation still revoke them for real. API/CLI clients may instead
+  send the token as an `Authorization: Bearer` header.
 - **Rotate the password:** edit `ADMIN_PASSWORD` in `.env`, then
   `docker compose up -d api`. All existing sessions for the account are revoked
   and everyone signs in again with the new password.

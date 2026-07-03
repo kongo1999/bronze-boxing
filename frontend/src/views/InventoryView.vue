@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue";
 import { RouterLink } from "vue-router";
-import { Plus, Package } from "lucide-vue-next";
+import { Plus, Package, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import type { InventoryItem, Trainee, Sale } from "@/lib/types";
@@ -67,18 +67,61 @@ async function load() {
 loading.value = !showCached();
 load();
 
+function resetForm() {
+  Object.assign(form, { name: "", price: 0, stock: 0, lowStockThreshold: 3 });
+}
+function cancelAdd() {
+  showAdd.value = false;
+  resetForm();
+}
 async function addItem() {
   if (busy.value || !form.name.trim() || form.price <= 0) return;
   busy.value = true;
   try {
     await api.post("/inventory", form);
-    Object.assign(form, { name: "", price: 0, stock: 0, lowStockThreshold: 3 });
+    resetForm();
     showAdd.value = false;
     await load();
   } catch (e) {
     toast(e instanceof Error && e.message ? e.message : "Couldn't add item.", "error");
   } finally {
     busy.value = false;
+  }
+}
+
+// Per-item inline edit.
+const editFor = ref<string | null>(null);
+const savingEdit = ref(false);
+const editForm = reactive({ name: "", price: 0, stock: 0, lowStockThreshold: 3 });
+function openEdit(i: InventoryItem) {
+  editFor.value = i.id;
+  sellFor.value = null; // don't stack two panels on one item
+  Object.assign(editForm, {
+    name: i.name,
+    price: i.price,
+    stock: i.stock,
+    lowStockThreshold: i.lowStockThreshold ?? 0,
+  });
+}
+async function saveEdit(i: InventoryItem) {
+  if (savingEdit.value || !editForm.name.trim() || editForm.price <= 0) return;
+  savingEdit.value = true;
+  try {
+    // Full-replace endpoint: carry over fields the form doesn't expose so they
+    // aren't blanked.
+    await api.put(`/inventory/${i.id}`, {
+      ...editForm,
+      sku: i.sku ?? "",
+      costPrice: i.costPrice ?? 0,
+      active: i.active,
+    });
+    editFor.value = null;
+    await load();
+    toast("Item updated.", "success");
+  } catch (e) {
+    toast(e instanceof Error && e.message ? e.message : "Couldn't update item.", "error");
+  } finally {
+    savingEdit.value = false;
   }
 }
 function openSell(id: string) {
@@ -121,7 +164,10 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
         <label class="block"><span class="mb-1 block text-xs text-faint">Stock</span><input v-model.number="form.stock" type="number" min="0" :class="inputCls" /></label>
         <label class="block"><span class="mb-1 block text-xs text-faint">Low at</span><input v-model.number="form.lowStockThreshold" type="number" min="0" :class="inputCls" /></label>
       </div>
-      <Button size="sm" :disabled="busy || !form.name.trim() || form.price <= 0" @click="addItem">{{ busy ? "Adding…" : "Add item" }}</Button>
+      <div class="flex gap-2">
+        <Button size="sm" :disabled="busy || !form.name.trim() || form.price <= 0" @click="addItem">{{ busy ? "Adding…" : "Add item" }}</Button>
+        <Button size="sm" variant="ghost" @click="cancelAdd">Cancel</Button>
+      </div>
     </Card>
 
     <Skeleton v-if="loading" :rows="5" />
@@ -142,7 +188,21 @@ const low = (i: InventoryItem) => i.lowStockThreshold && i.stock <= i.lowStockTh
               <p class="text-xs text-faint">{{ money(i.price) }} · {{ i.stock }} in stock</p>
             </div>
             <Badge v-if="low(i)" tone="partial">Low</Badge>
+            <button class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit item" @click="openEdit(i)"><Pencil class="h-4 w-4" /></button>
             <Button size="sm" variant="ghost" :disabled="i.stock <= 0" @click="openSell(i.id)">Sell</Button>
+          </div>
+
+          <div v-if="editFor === i.id" class="mt-3 space-y-3 rounded-xl bg-elevated p-3">
+            <input v-model="editForm.name" placeholder="Item name" :class="inputCls" />
+            <div class="grid grid-cols-3 gap-2">
+              <label class="block"><span class="mb-1 block text-xs text-faint">Price</span><input v-model.number="editForm.price" type="number" min="0" :class="inputCls" /></label>
+              <label class="block"><span class="mb-1 block text-xs text-faint">Stock</span><input v-model.number="editForm.stock" type="number" min="0" :class="inputCls" /></label>
+              <label class="block"><span class="mb-1 block text-xs text-faint">Low at</span><input v-model.number="editForm.lowStockThreshold" type="number" min="0" :class="inputCls" /></label>
+            </div>
+            <div class="flex gap-2">
+              <Button size="sm" :disabled="savingEdit || !editForm.name.trim() || editForm.price <= 0" @click="saveEdit(i)">{{ savingEdit ? "Saving…" : "Save changes" }}</Button>
+              <Button size="sm" variant="ghost" @click="editFor = null">Cancel</Button>
+            </div>
           </div>
           <div v-if="sellFor === i.id" class="mt-3 space-y-2 rounded-xl bg-elevated p-3">
             <div class="grid grid-cols-2 gap-2">

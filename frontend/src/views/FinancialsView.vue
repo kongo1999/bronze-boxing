@@ -9,6 +9,7 @@ import PageHeader from "@/components/ui/PageHeader.vue";
 import StatTile from "@/components/ui/StatTile.vue";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
+import { btnClasses } from "@/components/ui/button";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import MonthPicker from "@/components/ui/MonthPicker.vue";
@@ -172,7 +173,7 @@ const catLabel: Record<string, string> = {
       <section class="space-y-2">
         <div class="flex items-center justify-between px-1">
           <h2 class="label-eyebrow text-[0.625rem] text-faint">Outgoings · {{ monthLabel(month) }}</h2>
-          <button class="inline-flex items-center gap-1 text-sm font-medium text-bronze hover:underline" @click="showAdd = !showAdd"><Plus class="h-3.5 w-3.5" /> Expense</button>
+          <button :class="btnClasses('primary', 'sm')" @click="showAdd = !showAdd"><Plus class="h-4 w-4" /> {{ showAdd ? "Close" : "Add expense" }}</button>
         </div>
 
         <Card v-if="showAdd" class="space-y-3 p-4">

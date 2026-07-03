@@ -12,6 +12,7 @@ const router = useRouter();
 
 const username = ref("");
 const password = ref("");
+const remember = ref(true);
 const checking = ref(false);
 const error = ref("");
 
@@ -19,7 +20,7 @@ async function submit() {
   if (checking.value || !username.value.trim() || !password.value) return;
   checking.value = true;
   error.value = "";
-  const err = await login(username.value.trim(), password.value);
+  const err = await login(username.value.trim(), password.value, remember.value);
   if (err === null) {
     clearCache();
     const to = typeof route.query.to === "string" ? route.query.to : "/";
@@ -56,6 +57,10 @@ async function submit() {
           placeholder="Password"
           :class="inputCls"
         />
+        <label class="flex items-center gap-2 text-sm text-muted select-none">
+          <input v-model="remember" type="checkbox" class="h-4 w-4 accent-[oklch(0.72_0.13_64)]" />
+          Remember me on this device
+        </label>
         <p v-if="error" class="text-sm text-overdue">{{ error }}</p>
         <Button class="w-full" :disabled="checking || !username.trim() || !password" type="submit">
           {{ checking ? "Signing in…" : "Sign in" }}

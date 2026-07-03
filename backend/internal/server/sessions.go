@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -137,6 +138,11 @@ func (h *sessionHandler) create(c *fiber.Ctx) error {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	if clash, err := h.findOverlap(ctx, s.Type, s.Start, s.DurationMin, nil); err != nil {
+		return err
+	} else if clash != nil {
+		return fiber.NewError(fiber.StatusConflict, overlapMsg(s.Type, clash))
+	}
 	res, err := h.store.Coll(models.CollSessions).InsertOne(ctx, s)
 	if err != nil {
 		return err
@@ -189,6 +195,29 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 	}
 	if in.Attendees != nil {
 		set["attendees"] = h.buildAttendees(ctx, in.Attendees)
+	}
+	// Re-check overlaps only when a time-affecting field moved — a status-only
+	// or attendee-only edit can't create a clash and shouldn't pay for the query.
+	if in.Start != nil || in.Type != "" || in.DurationMin > 0 {
+		var cur models.Session
+		if err := h.store.Coll(models.CollSessions).FindOne(ctx, bson.M{"_id": id}).Decode(&cur); err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "session not found")
+		}
+		typ, start, dur := cur.Type, cur.Start, cur.DurationMin
+		if in.Type != "" {
+			typ = in.Type
+		}
+		if in.Start != nil {
+			start = *in.Start
+		}
+		if in.DurationMin > 0 {
+			dur = in.DurationMin
+		}
+		if clash, err := h.findOverlap(ctx, typ, start, dur, &id); err != nil {
+			return err
+		} else if clash != nil {
+			return fiber.NewError(fiber.StatusConflict, overlapMsg(typ, clash))
+		}
 	}
 	if _, err := h.store.Coll(models.CollSessions).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
 		return err
@@ -363,6 +392,24 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 	if len(docs) == 0 {
 		return c.JSON(fiber.Map{"created": 0, "seriesId": seriesID, "sessions": []models.Session{}})
 	}
+	// Reject the whole series if any generated session would clash — no partial
+	// inserts. Sessions within a series never overlap each other (one per day),
+	// so we only check against existing bookings.
+	var conflicts []time.Time
+	for i := range preview {
+		clash, err := h.findOverlap(ctx, preview[i].Type, preview[i].Start, preview[i].DurationMin, nil)
+		if err != nil {
+			return err
+		}
+		if clash != nil {
+			conflicts = append(conflicts, preview[i].Start)
+		}
+	}
+	if len(conflicts) > 0 {
+		return fiber.NewError(fiber.StatusConflict, fmt.Sprintf(
+			"%d session(s) in this series overlap existing bookings (first: %s). %s",
+			len(conflicts), conflicts[0].Format("Mon Jan 2, 3:04 PM"), ruleHint(defaultStr(in.Type, models.SessionGroup))))
+	}
 	if _, err := h.store.Coll(models.CollSessions).InsertMany(ctx, docs); err != nil {
 		return err
 	}
@@ -371,4 +418,77 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 		"seriesId": seriesID,
 		"sessions": preview,
 	})
+}
+
+// findOverlap returns the first existing session that a booking of the given
+// type/start/duration would illegally overlap, or nil if the slot is clear.
+//
+// Rule: a group class needs exclusive time — nothing (group or private) may
+// overlap it. A private (PT) session may overlap other private sessions, but
+// never a group class. So a new private booking only needs to be checked
+// against group classes; a new group booking against everything.
+//
+// Cancelled sessions never block. excludeID skips a session against itself
+// (used when editing). We over-fetch a 24h lower window and refine in Go since
+// per-session durations aren't expressible in the Mongo range query.
+func (h *sessionHandler) findOverlap(ctx context.Context, typ string, start time.Time, dur int, excludeID *primitive.ObjectID) (*models.Session, error) {
+	end := start.Add(time.Duration(dur) * time.Minute)
+	filter := bson.M{
+		"status": bson.M{"$ne": models.SessCancelled},
+		"start":  bson.M{"$lt": end, "$gte": start.Add(-24 * time.Hour)},
+	}
+	if typ != models.SessionGroup {
+		filter["type"] = models.SessionGroup // a private booking only clashes with group classes
+	}
+	if excludeID != nil {
+		filter["_id"] = bson.M{"$ne": *excludeID}
+	}
+	cur, err := h.store.Coll(models.CollSessions).Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []models.Session
+	if err := cur.All(ctx, &candidates); err != nil {
+		return nil, err
+	}
+	for i := range candidates {
+		if overlapForbidden(typ, start, dur, candidates[i]) {
+			return &candidates[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// overlapForbidden decides, in isolation, whether a booking of newType over
+// [start, start+dur) illegally collides with an existing session. Pure and
+// DB-free so the rule can be unit-tested. Rule: two private sessions may
+// overlap; any overlap involving a group class is forbidden. Cancelled
+// sessions never collide.
+func overlapForbidden(newType string, start time.Time, dur int, ex models.Session) bool {
+	if ex.Status == models.SessCancelled {
+		return false
+	}
+	if newType != models.SessionGroup && ex.Type != models.SessionGroup {
+		return false // private vs private is allowed to overlap
+	}
+	newEnd := start.Add(time.Duration(dur) * time.Minute)
+	exEnd := ex.Start.Add(time.Duration(ex.DurationMin) * time.Minute)
+	return start.Before(exEnd) && ex.Start.Before(newEnd) // half-open overlap
+}
+
+func ruleHint(typ string) string {
+	if typ == models.SessionGroup {
+		return "Group classes can't overlap other sessions."
+	}
+	return "Private sessions can't overlap a group class."
+}
+
+func overlapMsg(newType string, clash *models.Session) string {
+	// clash.Start comes back from Mongo in UTC; render it in the studio's wall
+	// clock (time.Local is set to STUDIO_TZ) so the time matches the schedule.
+	when := clash.Start.Local().Format("Mon Jan 2, 3:04 PM")
+	if newType == models.SessionGroup {
+		return fmt.Sprintf("Group classes need exclusive time — this overlaps %q at %s.", clash.Title, when)
+	}
+	return fmt.Sprintf("This overlaps the group class %q at %s — private sessions can't overlap a group class.", clash.Title, when)
 }

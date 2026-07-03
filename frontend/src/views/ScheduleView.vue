@@ -1,37 +1,47 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { ChevronLeft, ChevronRight, CalendarPlus } from "lucide-vue-next";
+import { ChevronLeft, ChevronRight, CalendarPlus, Check, CalendarDays } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import { toast } from "@/lib/toast";
 import type { Session } from "@/lib/types";
-import { formatTime } from "@/lib/format";
+import { formatTime, dateKey } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import Badge from "@/components/ui/Badge.vue";
+import EmptyState from "@/components/ui/EmptyState.vue";
 import { btnClasses } from "@/components/ui/button";
 
-const cursor = ref(new Date());
-const selected = ref(new Date());
-const sessions = ref<Session[]>([]);
+const cursor = ref(new Date()); // any date within the visible week
 
-const monthLabel = computed(() =>
-  cursor.value.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-);
-
+function mondayOf(d: Date): Date {
+  const offset = (d.getDay() + 6) % 7; // days since Monday
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset);
+}
 function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-const cacheKey = () => `sessions:${cursor.value.getFullYear()}-${cursor.value.getMonth()}`;
+const weekStart = computed(() => mondayOf(cursor.value));
+const weekEndExclusive = computed(
+  () => new Date(weekStart.value.getFullYear(), weekStart.value.getMonth(), weekStart.value.getDate() + 7),
+);
+const isCurrentWeek = computed(() => sameDay(mondayOf(new Date()), weekStart.value));
+
+const weekLabel = computed(() => {
+  const start = weekStart.value;
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(start)} – ${fmt(end)}, ${end.getFullYear()}`;
+});
+
+const sessions = ref<Session[]>([]);
+const cacheKey = () => `sessions:week:${dateKey(weekStart.value)}`;
 let loadToken = 0;
 async function load() {
   const my = ++loadToken;
-  const y = cursor.value.getFullYear();
-  const m = cursor.value.getMonth();
-  const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
-  const next = new Date(y, m + 1, 1);
-  const to = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+  const from = dateKey(weekStart.value);
+  const to = dateKey(weekEndExclusive.value);
   try {
     const res = await api.get<Session[]>(`/sessions?from=${from}&to=${to}`);
     if (my !== loadToken) return; // ignore stale (out-of-order) responses
@@ -45,102 +55,101 @@ function showCached() {
   const hit = readCache<Session[]>(cacheKey());
   if (hit) sessions.value = hit;
 }
-watch(cursor, () => { showCached(); load(); }, { immediate: true });
+watch(weekStart, () => { showCached(); load(); }, { immediate: true });
 
-// Build a Monday-start grid covering the visible month.
-const weeks = computed(() => {
-  const y = cursor.value.getFullYear();
-  const m = cursor.value.getMonth();
-  const first = new Date(y, m, 1);
-  const startOffset = (first.getDay() + 6) % 7; // days since Monday
-  const gridStart = new Date(y, m, 1 - startOffset);
-  const out: { date: Date; inMonth: boolean; count: number }[][] = [];
-  for (let w = 0; w < 6; w++) {
-    const row: { date: Date; inMonth: boolean; count: number }[] = [];
-    for (let d = 0; d < 7; d++) {
-      const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + w * 7 + d);
-      const count = sessions.value.filter((s) => sameDay(new Date(s.start), date)).length;
-      row.push({ date, inMonth: date.getMonth() === m, count });
-    }
-    out.push(row);
+// Group the visible week's sessions by day (Monday first); skip empty days so
+// the list reads like a to-do list, not a mostly-blank grid.
+const days = computed(() => {
+  const today = new Date();
+  const out: { key: string; label: string; isToday: boolean; sessions: Session[] }[] = [];
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(weekStart.value.getFullYear(), weekStart.value.getMonth(), weekStart.value.getDate() + i);
+    const daySessions = sessions.value
+      .filter((s) => sameDay(new Date(s.start), date))
+      .sort((a, b) => +new Date(a.start) - +new Date(b.start));
+    if (daySessions.length === 0) continue;
+    out.push({
+      key: date.toISOString(),
+      label: date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
+      isToday: sameDay(date, today),
+      sessions: daySessions,
+    });
   }
   return out;
 });
-
-const daySessions = computed(() =>
-  sessions.value
-    .filter((s) => sameDay(new Date(s.start), selected.value))
-    .sort((a, b) => +new Date(a.start) - +new Date(b.start)),
-);
-const selectedLabel = computed(() =>
-  selected.value.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
-);
+const isEmpty = computed(() => days.value.length === 0);
 
 function shift(delta: number) {
-  cursor.value = new Date(cursor.value.getFullYear(), cursor.value.getMonth() + delta, 1);
+  cursor.value = new Date(weekStart.value.getFullYear(), weekStart.value.getMonth(), weekStart.value.getDate() + delta * 7);
 }
-const today = new Date();
-const dows = ["M", "T", "W", "T", "F", "S", "S"];
+function goToday() {
+  cursor.value = new Date();
+}
+
+// Optimistic: flip the checkbox immediately, fire one request, revert on failure.
+// Mirrors the Reminders list interaction — no detour through a calendar/attendance
+// screen just to mark a class done.
+async function toggleDone(s: Session) {
+  if (s.status === "cancelled") return;
+  const prev = s.status;
+  const next = s.status === "completed" ? "scheduled" : "completed";
+  s.status = next;
+  try {
+    await api.put(`/sessions/${s.id}`, { status: next });
+  } catch {
+    s.status = prev;
+    toast("Couldn't update that session.", "error");
+  }
+}
 </script>
 
 <template>
   <div class="space-y-4">
-    <PageHeader eyebrow="Calendar" title="Schedule">
+    <PageHeader eyebrow="Classes" title="Schedule">
       <template #action>
         <RouterLink to="/schedule/new" :class="btnClasses('primary', 'sm')"><CalendarPlus class="h-4 w-4" /> New</RouterLink>
       </template>
     </PageHeader>
 
-    <div class="rounded-2xl border border-line bg-surface p-3">
-      <div class="mb-2 flex items-center justify-between">
-        <button :class="btnClasses('ghost', 'icon')" aria-label="Previous month" @click="shift(-1)"><ChevronLeft class="h-5 w-5" /></button>
-        <p class="font-display font-semibold tracking-tight">{{ monthLabel }}</p>
-        <button :class="btnClasses('ghost', 'icon')" aria-label="Next month" @click="shift(1)"><ChevronRight class="h-5 w-5" /></button>
-      </div>
-      <div class="grid grid-cols-7 gap-1 text-center">
-        <span v-for="(d, i) in dows" :key="i" class="label-eyebrow py-1 text-[0.6rem] text-faint">{{ d }}</span>
-      </div>
-      <div v-for="(week, wi) in weeks" :key="wi" class="grid grid-cols-7 gap-1">
-        <button
-          v-for="(cell, ci) in week"
-          :key="ci"
-          class="relative aspect-square rounded-lg text-sm transition-[transform,background-color,color] duration-150 ease-[var(--ease-out-quart)] active:scale-90"
-          :class="[
-            cell.inMonth ? 'text-fg' : 'text-faint/40',
-            sameDay(cell.date, selected) ? 'bg-bronze text-bronze-ink font-semibold' : 'hover:bg-elevated',
-          ]"
-          @click="selected = cell.date"
-        >
-          <span :class="sameDay(cell.date, today) && !sameDay(cell.date, selected) ? 'text-bronze font-semibold' : ''">
-            {{ cell.date.getDate() }}
-          </span>
-          <span
-            v-if="cell.count > 0"
-            class="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full"
-            :class="sameDay(cell.date, selected) ? 'bg-bronze-ink' : 'bg-bronze'"
-          />
-        </button>
-      </div>
+    <div class="flex items-center justify-between rounded-2xl border border-line bg-surface p-3">
+      <button :class="btnClasses('ghost', 'icon')" aria-label="Previous week" @click="shift(-1)"><ChevronLeft class="h-5 w-5" /></button>
+      <p class="font-display font-semibold tracking-tight">{{ weekLabel }}</p>
+      <button :class="btnClasses('ghost', 'icon')" aria-label="Next week" @click="shift(1)"><ChevronRight class="h-5 w-5" /></button>
     </div>
 
-    <section class="space-y-2">
-      <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">{{ selectedLabel }}</h2>
-      <p v-if="daySessions.length === 0" class="rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
-        No sessions this day.
-      </p>
-      <ul v-else class="space-y-2">
-        <li v-for="s in daySessions" :key="s.id">
-          <RouterLink
-            :to="`/schedule/${s.id}`"
-            class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 transition-colors hover:border-bronze/30"
-            :class="s.status === 'cancelled' ? 'opacity-50' : ''"
+    <div v-if="!isCurrentWeek" class="flex justify-center">
+      <button :class="btnClasses('ghost', 'sm')" @click="goToday"><CalendarDays class="h-4 w-4" /> Jump to this week</button>
+    </div>
+
+    <EmptyState v-if="isEmpty" :icon="CalendarDays" title="No classes this week" description="Add a session to fill the week." />
+
+    <section v-for="day in days" :key="day.key" class="space-y-2">
+      <h2 class="flex items-center gap-2 px-1 font-display text-sm font-semibold tracking-tight text-fg">
+        {{ day.label }}
+        <span v-if="day.isToday" class="rounded-full bg-bronze px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-bronze-ink">Today</span>
+      </h2>
+      <ul class="space-y-2">
+        <li
+          v-for="s in day.sessions"
+          :key="s.id"
+          class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5"
+          :class="s.status === 'cancelled' ? 'opacity-50' : ''"
+        >
+          <button
+            class="grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors"
+            :class="s.status === 'completed' ? 'border-paid bg-paid/20 text-paid' : 'border-line text-transparent hover:border-bronze'"
+            aria-label="Mark session done"
+            @click="toggleDone(s)"
           >
+            <Check class="h-3.5 w-3.5" />
+          </button>
+          <RouterLink :to="`/schedule/${s.id}`" class="flex min-w-0 flex-1 items-center gap-3">
             <div class="w-14 shrink-0 text-center">
               <p class="font-display text-sm font-semibold tnum">{{ formatTime(s.start) }}</p>
             </div>
             <div class="min-w-0 flex-1">
-              <p class="truncate font-medium" :class="s.status === 'cancelled' ? 'line-through' : ''">{{ s.title }}</p>
-              <p class="truncate text-xs text-muted">{{ s.type === "private" ? (s.attendees[0]?.traineeName ?? "Private") : `${s.attendees.length} booked` }}</p>
+              <p class="truncate font-medium" :class="s.status === 'completed' ? 'line-through opacity-70' : ''">{{ s.title }}</p>
+              <p class="truncate text-xs text-muted">{{ s.type === "private" ? (s.attendees.length > 1 ? `${s.attendees.length} booked` : (s.attendees[0]?.traineeName ?? "Private")) : `${s.attendees.length} booked` }}</p>
             </div>
             <Badge :tone="s.type === 'group' ? 'bronze' : 'info'">{{ s.type === "group" ? "Group" : "Private" }}</Badge>
           </RouterLink>
