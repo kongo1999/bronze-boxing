@@ -382,11 +382,36 @@ export interface ClosingDay {
   actor?: string;
 }
 
-export interface SearchResults {
-  trainees: Trainee[];
-  sessions: Session[];
-  payments: Payment[];
-  inventory: InventoryItem[];
+export type SearchKind = "trainee" | "session" | "payment" | "sale" | "item" | "expense" | "reminder";
+
+/** One result of GET /search. */
+export interface SearchHit {
+  kind: SearchKind;
+  id: string;
+  label: string;
+  sub?: string;
+  date?: string;
+  amount?: number;
+  /** Kept but not current: void, archived, inactive, cancelled, completed, done. */
+  flag?: string;
+  score: number;
+  typo?: boolean;
+  month?: string;
+  trainee?: string;
+}
+
+export interface SearchGroup {
+  kind: SearchKind;
+  total: number;
+  hasMore: boolean;
+  items: SearchHit[];
+}
+
+export interface SearchResponse {
+  query: string;
+  groups: SearchGroup[];
+  /** The corrected query, when nothing matched without a typo. */
+  didYouMean?: string;
 }
 
 // One line of the append-only audit trail (GET /audit/:entity/:id). `before`

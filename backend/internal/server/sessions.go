@@ -232,6 +232,10 @@ func (h *sessionHandler) list(c *fiber.Ctx) error {
 	if c.Query("order") == "desc" {
 		sort = bson.D{{Key: "start", Value: -1}}
 	}
+	if q, ok := searchQuery(c); ok {
+		return rankedFind(c, ctx, h.store, models.CollSessions, kindSession, filter, q,
+			func(s models.Session) primitive.ObjectID { return s.ID })
+	}
 	if len(filter) == 0 && c.Query("limit") == "" {
 		return badField("from", "give a date range, a trainee, a plan or a series (or page with limit)")
 	}

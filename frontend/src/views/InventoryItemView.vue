@@ -22,6 +22,7 @@ import Alert from "@/components/ui/Alert.vue";
 import AuditTrail from "@/components/ui/AuditTrail.vue";
 import SellSheet from "@/components/SellSheet.vue";
 import { btnClasses } from "@/components/ui/button";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const router = useRouter();
@@ -32,7 +33,7 @@ const here = computed(() => route.fullPath);
 const { data: item, loading, error, reload } = useCachedAsync(`inventory:${id}`, () => api.get<InventoryItem>(`/inventory/${id}`));
 const { data: trainees } = useCachedAsync("trainees", () => api.get<Trainee[]>("/trainees?archived=include"));
 const buyers = computed(() =>
-  (trainees.value ?? []).filter((t) => t.status === "active" && !t.archivedAt).map((t) => ({ id: t.id, label: t.name })),
+  (trainees.value ?? []).filter((t) => t.status === "active" && !t.archivedAt).map(traineeOption),
 );
 
 const moves = ref<StockMovement[]>([]);

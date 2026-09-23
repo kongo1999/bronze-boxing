@@ -16,6 +16,7 @@ import { isDayKey, todayKey } from "@/lib/studio";
 import { backTarget } from "@/lib/route-state";
 import { toast } from "@/lib/toast";
 import { refreshBadges } from "@/lib/badges";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const router = useRouter();
@@ -77,7 +78,7 @@ onMounted(async () => {
 
 const linkOptions = computed(() =>
   form.relatedType === "trainee"
-    ? trainees.value.map((t) => ({ id: t.id, label: t.name, sub: t.status === "inactive" ? "inactive" : undefined }))
+    ? trainees.value.map(traineeOption)
     : form.relatedType === "item"
       ? items.value.map((i) => ({ id: i.id, label: i.name, sub: i.sku }))
       : [],
@@ -174,7 +175,7 @@ const pill = (active: boolean) => [
         <span class="mb-1 block text-xs text-faint">About <span class="text-faint/70">(optional)</span></span>
         <div v-if="form.relatedType === 'session'" class="flex items-center justify-between rounded-xl border border-line bg-elevated px-3 py-2 text-sm">
           <span class="truncate">Session: {{ form.relatedLabel || "linked session" }}</span>
-          <button type="button" class="min-h-9 px-2 text-xs text-faint hover:text-fg" @click="setRelatedType('')">Remove</button>
+          <button type="button" class="min-h-10 px-2 text-xs text-faint hover:text-fg" @click="setRelatedType('')">Remove</button>
         </div>
         <template v-else>
           <div class="mb-1.5 flex gap-1.5" role="radiogroup" aria-label="Link to">

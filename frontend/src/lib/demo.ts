@@ -6,9 +6,10 @@
 // reminder, selling an item, adding a payment all reflect immediately. A page
 // reload resets to this seed. Local `npm run dev` keeps using the real Go API.
 
+import { rank, normalize } from "./fuzzy";
 import type {
   Trainee, Session, Payment, Reminder, Expense, InventoryItem, Sale,
-  SubStatus, Dashboard, Financials, SearchResults, Attendee, AuditEntry, LedgerRow,
+  SubStatus, Dashboard, Financials, SearchResponse, SearchHit, SearchKind, Attendee, AuditEntry, LedgerRow,
 } from "./types";
 
 // Demo on in production unless explicitly disabled; off in dev unless forced.
@@ -255,15 +256,34 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   }
 
   if (path === "/search") {
-    const q = (params.get("q") ?? "").toLowerCase();
-    const res: SearchResults = q
-      ? {
-          trainees: trainees.filter((t) => t.name.toLowerCase().includes(q)).slice(0, 10),
-          sessions: sessions.filter((s) => s.title.toLowerCase().includes(q)).slice(0, 10),
-          payments: payments.filter((p) => (p.traineeName ?? "").toLowerCase().includes(q) || (p.note ?? "").toLowerCase().includes(q)).slice(0, 10),
-          inventory: inventory.filter((i) => i.name.toLowerCase().includes(q)).slice(0, 10),
-        }
-      : { trainees: [], sessions: [], payments: [], inventory: [] };
+    // Same matcher and response shape as the API.
+    const q = params.get("q") ?? "";
+    const limit = Number(params.get("limit") ?? 5);
+    const offset = Number(params.get("offset") ?? 0);
+    const kinds = (params.get("kinds") ?? "").split(",").filter(Boolean);
+    const pools: [SearchKind, SearchHit[], (h: SearchHit) => (string | undefined)[]][] = [
+      ["trainee", trainees.map((t) => ({ kind: "trainee", id: t.id, label: t.name, sub: t.phone, date: t.createdAt, score: 0 })), (h) => [h.label, h.sub]],
+      ["session", sessions.map((s) => ({ kind: "session", id: s.id, label: s.title, sub: s.attendees.map((a) => a.traineeName).join(", "), date: s.start, score: 0 })), (h) => [h.label, h.sub]],
+      ["payment", payments.map((p) => ({ kind: "payment", id: p.id, label: p.traineeName || p.type, sub: p.type, date: p.date, amount: p.amount, flag: p.voidedAt ? "void" : undefined, score: 0 })), (h) => [h.label, h.sub]],
+      ["item", inventory.map((i) => ({ kind: "item", id: i.id, label: i.name, sub: i.sku, amount: i.price, score: 0 })), (h) => [h.label, h.sub]],
+    ];
+    const res: SearchResponse = { query: normalize(q), groups: [] };
+    let allTypos = true;
+    let best: { score: number; corrected: string } | undefined;
+    for (const [kind, pool, fields] of pools) {
+      if (kinds.length && !kinds.includes(kind)) continue;
+      const ranked = rank(pool, q, fields);
+      if (!ranked.length) continue;
+      for (const x of ranked) {
+        if (!x.typo) allTypos = false;
+        if (!best || x.score > best.score) best = x;
+      }
+      res.groups.push({
+        kind, total: ranked.length, hasMore: offset + limit < ranked.length,
+        items: ranked.slice(offset, offset + limit).map((x) => ({ ...x.item, score: x.score, typo: x.typo })),
+      });
+    }
+    if (best && allTypos && best.corrected) res.didYouMean = best.corrected;
     return r(res);
   }
 

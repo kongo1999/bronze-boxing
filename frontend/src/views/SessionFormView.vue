@@ -17,6 +17,8 @@ import { dateKey } from "@/lib/format";
 import { dayOf, timeOf, studioInstant, isDayKey, formatDay, formatTime } from "@/lib/studio";
 import { backTarget } from "@/lib/route-state";
 import { toast } from "@/lib/toast";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import Highlight from "@/components/ui/Highlight.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -98,11 +100,15 @@ onMounted(async () => {
       }
     }
   } catch (e) {
+    // Keep the form closed: saving a blank form over a session we couldn't
+    // read would overwrite it.
+    loadFailed.value = true;
     error.value = errMsg(e, "Couldn't load this session.");
   } finally {
     loading.value = false;
   }
 });
+const loadFailed = ref(false);
 
 // Active plans of whoever is ticked, so a booking can count toward one.
 const plans = ref<SessionPlan[]>([]);
@@ -176,10 +182,7 @@ function toggleAttendee(id: string) {
   }
 }
 
-const filteredTrainees = computed(() => {
-  const q = search.value.trim().toLowerCase();
-  return q ? trainees.value.filter((t) => t.name.toLowerCase().includes(q)) : trainees.value;
-});
+const filteredTrainees = computed(() => fuzzyFilter(trainees.value, search.value, (t) => [t.name, t.phone]));
 const overCapacity = computed(() => form.capacity > 0 && form.attendees.length > form.capacity);
 
 // Keep each attendee's recorded attendance; anyone newly ticked starts booked.
@@ -237,6 +240,7 @@ const back = () => backTarget(route.query, isEdit ? `/schedule/${editId}` : "/sc
 const startISO = () => studioInstant(form.date, form.time).toISOString();
 
 async function submit(override = false) {
+  if (loadFailed.value) return;
   error.value = undefined;
   conflictDates.value = [];
   if (!form.title.trim()) return (error.value = "Title is required");
@@ -293,6 +297,11 @@ async function submit(override = false) {
     <h1 class="font-display text-2xl font-semibold">{{ isEdit ? "Edit session" : duplicateId ? "Duplicate session" : "New session" }}</h1>
 
     <Skeleton v-if="loading" variant="detail" />
+
+    <Alert v-else-if="loadFailed">
+      {{ error }}
+      <button class="ml-1 font-medium underline" @click="router.go(0)">Retry</button>
+    </Alert>
 
     <Card v-else class="space-y-4 p-4">
       <Alert v-if="error">
@@ -456,12 +465,12 @@ async function submit(override = false) {
                 class="grid h-5 w-5 shrink-0 place-items-center rounded-md border transition-colors"
                 :class="form.attendees.includes(t.id) ? 'border-bronze bg-bronze/20 text-bronze' : 'border-line text-transparent'"
               ><Check class="h-3 w-3" /></span>
-              {{ t.name }}
+              <Highlight :text="t.name" :q="search" />
             </button>
             <div v-if="form.attendees.includes(t.id) && plansFor(t.id).length" class="mb-1 ml-9 flex flex-wrap gap-1">
               <button
                 type="button"
-                class="min-h-9 rounded-md border px-2 text-[0.6875rem]"
+                class="min-h-10 rounded-md border px-2 text-[0.6875rem]"
                 :class="!attendeePlan[t.id] ? 'border-bronze/60 text-bronze' : 'border-line text-faint'"
                 @click="attendeePlan[t.id] = ''"
               >No plan</button>
@@ -469,7 +478,7 @@ async function submit(override = false) {
                 v-for="p in plansFor(t.id)"
                 :key="p.id"
                 type="button"
-                class="min-h-9 rounded-md border px-2 text-[0.6875rem]"
+                class="min-h-10 rounded-md border px-2 text-[0.6875rem]"
                 :class="attendeePlan[t.id] === p.id ? 'border-bronze bg-bronze/15 text-bronze' : 'border-line text-faint hover:text-fg'"
                 @click="attendeePlan[t.id] = p.id"
               >{{ p.title }} · {{ p.progress.remaining }} left</button>

@@ -16,6 +16,8 @@ import Avatar from "@/components/ui/Avatar.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import Highlight from "@/components/ui/Highlight.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
@@ -47,8 +49,7 @@ const owed = (t: Trainee) => {
 
 const q = ref("");
 const filtered = computed(() => {
-  const term = q.value.trim().toLowerCase();
-  const digits = term.replace(/\D/g, "");
+  const term = q.value.trim();
   const list = (data.value ?? []).filter((t) => {
     if (archived.value ? !t.archivedAt : !!t.archivedAt) return false;
     if (!archived.value && show.value !== "all" && t.status !== show.value) return false;
@@ -56,9 +57,10 @@ const filtered = computed(() => {
     const s = duesBy.value.get(t.id);
     if (dues.value === "owing" && !owed(t)) return false;
     if ((dues.value === "partial" || dues.value === "unpaid" || dues.value === "paid") && s?.state !== dues.value) return false;
-    if (!term) return true;
-    return t.name.toLowerCase().includes(term) || (digits.length >= 3 && (t.phone ?? "").replace(/\D/g, "").includes(digits));
+    return true;
   });
+  // A search ranks by match (name or phone, typos allowed); otherwise the chosen sort.
+  if (term) return fuzzyFilter(list, term, (t) => [t.name, t.phone]);
   if (sort.value === "recent") list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   else if (sort.value === "owed") list.sort((a, b) => owed(b) - owed(a) || a.name.localeCompare(b.name));
   else list.sort((a, b) => a.name.localeCompare(b.name));
@@ -139,9 +141,9 @@ const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
           <RouterLink :to="withBack(`/trainees/${t.id}`, here)" class="flex min-w-0 flex-1 items-center gap-3 p-3">
             <Avatar :name="t.name" :class="t.status === 'inactive' || t.archivedAt ? 'opacity-50' : ''" />
             <div class="min-w-0 flex-1">
-              <p class="truncate font-medium">{{ t.name }}</p>
+              <p class="truncate font-medium"><Highlight :text="t.name" :q="q" /></p>
               <p class="truncate text-sm text-muted">
-                {{ t.phone || (t.skillLevel ? t.skillLevel : "No phone") }}
+                <Highlight :text="t.phone || (t.skillLevel ? t.skillLevel : 'No phone')" :q="q" />
               </p>
             </div>
             <div class="flex flex-col items-end gap-1">

@@ -12,6 +12,8 @@ import PageHeader from "@/components/ui/PageHeader.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import Highlight from "@/components/ui/Highlight.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
@@ -29,14 +31,13 @@ const priority = useQueryState<PriFilter>("priority", () => "all", (v): v is Pri
 const showDone = useQueryState<"0" | "1">("done", () => "0", (v): v is "0" | "1" => v === "0" || v === "1");
 
 const q = ref("");
-const filtered = computed(() => {
-  const term = q.value.trim().toLowerCase();
-  return (data.value ?? []).filter(
-    (r) =>
-      (priority.value === "all" || r.priority === priority.value) &&
-      (!term || r.title.toLowerCase().includes(term) || (r.relatedLabel ?? "").toLowerCase().includes(term)),
-  );
-});
+const filtered = computed(() =>
+  fuzzyFilter(
+    (data.value ?? []).filter((r) => priority.value === "all" || r.priority === priority.value),
+    q.value,
+    (r) => [r.title, r.relatedLabel],
+  ),
+);
 
 // Open reminders grouped by when they need attention; done ones kept apart.
 const RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 };
@@ -180,7 +181,7 @@ const chips: { v: PriFilter; l: string }[] = [
               </button>
               <span class="h-2 w-2 shrink-0 rounded-full" :class="dotColor(r.priority)" :aria-label="`${r.priority} priority`" />
               <div class="min-w-0 flex-1 px-2">
-                <p class="truncate text-sm">{{ r.title }}</p>
+                <p class="truncate text-sm"><Highlight :text="r.title" :q="q" /></p>
                 <p class="flex flex-wrap items-center gap-x-2 text-xs text-faint">
                   <span :class="g.key === 'overdue' ? 'text-overdue' : ''">{{ dueLabel(r) }}</span>
                   <span v-if="r.snoozedUntil && r.snoozedUntil > r.dueDay" class="inline-flex items-center gap-0.5"><AlarmClock class="h-3 w-3" /> snoozed</span>
@@ -198,9 +199,9 @@ const chips: { v: PriFilter; l: string }[] = [
             </div>
             <div class="flex items-center gap-1 border-t border-line/60 px-2 pt-1">
               <span class="text-[0.6875rem] text-faint">Snooze</span>
-              <button class="min-h-9 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-fg" @click="snooze(r, 1)">Tomorrow</button>
-              <button class="min-h-9 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-fg" @click="snooze(r, 7)">Next week</button>
-              <button class="ml-auto grid h-9 w-9 place-items-center rounded-lg text-faint hover:bg-overdue/10 hover:text-overdue" :aria-label="`Delete “${r.title}”`" @click="remove(r)"><Trash2 class="h-4 w-4" /></button>
+              <button class="min-h-10 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-fg" @click="snooze(r, 1)">Tomorrow</button>
+              <button class="min-h-10 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-fg" @click="snooze(r, 7)">Next week</button>
+              <button class="ml-auto grid h-10 w-10 place-items-center rounded-lg text-faint hover:bg-overdue/10 hover:text-overdue" :aria-label="`Delete “${r.title}”`" @click="remove(r)"><Trash2 class="h-4 w-4" /></button>
             </div>
           </li>
         </ul>
@@ -214,7 +215,7 @@ const chips: { v: PriFilter; l: string }[] = [
               <span class="grid h-6 w-6 place-items-center rounded-full border border-paid bg-paid/20 text-paid"><Check class="h-3.5 w-3.5" /></span>
             </button>
             <div class="min-w-0 flex-1 px-2">
-              <p class="truncate text-sm line-through">{{ r.title }}</p>
+              <p class="truncate text-sm line-through"><Highlight :text="r.title" :q="q" /></p>
               <p class="text-xs text-faint">
                 Due {{ formatDay(r.dueDay, { month: "short", day: "numeric" }) }}<template v-if="r.recurrence"> · repeats {{ r.recurrence }}</template>
               </p>

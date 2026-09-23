@@ -498,6 +498,10 @@ func (h *inventoryHandler) sales(c *fiber.Ctx) error {
 		}
 		filter["item"] = iid
 	}
+	if q, ok := searchQuery(c); ok {
+		return rankedFind(c, ctx, h.store, models.CollSales, kindSale, filter, q,
+			func(s models.Sale) primitive.ObjectID { return s.ID })
+	}
 	return pagedFind[models.Sale](c, ctx, h.store.Coll(models.CollSales), filter,
 		bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}})
 }

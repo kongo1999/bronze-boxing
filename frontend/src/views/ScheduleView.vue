@@ -17,6 +17,8 @@ import SearchInput from "@/components/ui/SearchInput.vue";
 import Alert from "@/components/ui/Alert.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import { btnClasses } from "@/components/ui/button";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import Highlight from "@/components/ui/Highlight.vue";
 
 const route = useRoute();
 
@@ -108,17 +110,11 @@ const isFull = (s: Session) => !!s.capacity && s.status !== "cancelled" && booke
 // "who is Rami in this week?" without leaving the schedule.
 const q = ref("");
 const matching = computed(() => {
-  const term = q.value.trim().toLowerCase();
-  return sessions.value.filter((s) => {
-    const f = filter.value;
-    if (f === "attention" ? !needsAttendance(s) : f !== "all" && s.status !== f) return false;
-    if (!term) return true;
-    return (
-      s.title.toLowerCase().includes(term) ||
-      (s.location ?? "").toLowerCase().includes(term) ||
-      s.attendees.some((a) => (a.traineeName ?? "").toLowerCase().includes(term))
-    );
-  });
+  const f = filter.value;
+  const inFilter = sessions.value.filter((s) => (f === "attention" ? needsAttendance(s) : f === "all" || s.status === f));
+  // Days stay in time order; the search only decides which classes show.
+  const hit = new Set(fuzzyFilter(inFilter, q.value, (s) => [s.title, s.attendees.map((a) => a.traineeName).join(" "), s.location, s.type]));
+  return inFilter.filter((s) => hit.has(s));
 });
 const attentionCount = computed(() => sessions.value.filter(needsAttendance).length);
 
@@ -253,7 +249,7 @@ async function toggleDone(s: Session) {
         <span v-if="day.isToday" class="rounded-full bg-bronze px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-bronze-ink">Today</span>
         <RouterLink
           :to="withBack('/schedule/new', here, { day: day.key })"
-          class="ml-auto grid h-8 w-8 place-items-center rounded-lg text-faint transition-colors hover:bg-elevated hover:text-bronze"
+          class="ml-auto grid h-10 w-10 place-items-center rounded-lg text-faint transition-colors hover:bg-elevated hover:text-bronze"
           :aria-label="`New session on ${day.label}`"
         ><Plus class="h-4 w-4" /></RouterLink>
       </h2>
@@ -283,7 +279,7 @@ async function toggleDone(s: Session) {
               <p class="font-display text-sm font-semibold tnum">{{ formatTime(s.start) }}</p>
             </div>
             <div class="min-w-0 flex-1">
-              <p class="truncate font-medium" :class="s.status === 'completed' ? 'line-through opacity-70' : ''">{{ s.title }}</p>
+              <p class="truncate font-medium" :class="s.status === 'completed' ? 'line-through opacity-70' : ''"><Highlight :text="s.title" :q="q" /></p>
               <p class="flex items-center gap-1 truncate text-xs text-muted">
                 <template v-if="s.type === 'private' && s.attendees.length === 1">{{ s.attendees[0]?.traineeName ?? "Private" }}</template>
                 <template v-else-if="s.capacity">

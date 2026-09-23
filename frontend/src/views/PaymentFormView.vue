@@ -15,6 +15,7 @@ import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
 import SearchSelect from "@/components/ui/SearchSelect.vue";
 import { inputCls } from "@/lib/ui";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const router = useRouter();
@@ -40,17 +41,23 @@ const form = reactive({
   note: "",
 });
 
-onMounted(async () => {
+// Without the roster the payment can't be attributed: saving waits for it.
+const rosterFailed = ref(false);
+async function loadRoster() {
+  rosterFailed.value = false;
+  error.value = undefined;
   try {
     trainees.value = await api.get<Trainee[]>("/trainees");
   } catch (e) {
+    rosterFailed.value = true;
     error.value = errMsg(e, "Couldn't load trainees.");
   }
-});
+}
+onMounted(loadRoster);
 
 // Searchable picker instead of a long native dropdown — the roster only grows.
 const traineeOptions = computed(() =>
-  trainees.value.map((t) => ({ id: t.id, label: t.name, sub: t.status === "inactive" ? "inactive" : undefined })),
+  trainees.value.map(traineeOption),
 );
 
 // Dues context for subscription payments: what's owed, paid, and remaining
@@ -127,10 +134,13 @@ async function submit() {
     <h1 class="font-display text-2xl font-semibold">Log payment</h1>
 
     <Card class="space-y-3 p-4">
-      <Alert v-if="error">{{ error }}</Alert>
+      <Alert v-if="error">
+        {{ error }}
+        <button v-if="rosterFailed" class="ml-1 font-medium underline" @click="loadRoster">Retry</button>
+      </Alert>
       <div>
         <span class="mb-1 block text-xs text-faint">Trainee<span v-if="form.type === 'subscription'" class="text-overdue"> *</span></span>
-        <SearchSelect v-model="form.trainee" :options="traineeOptions" empty-label="— (none)" placeholder="— (none)" search-placeholder="Search trainees…" />
+        <SearchSelect v-model="form.trainee" :options="traineeOptions" label="Trainee" empty-label="— (none)" placeholder="— (none)" search-placeholder="Search by name or phone…" />
         <span v-if="fieldErr.trainee" class="mt-1 block text-xs text-overdue">{{ fieldErr.trainee }}</span>
       </div>
       <div class="grid grid-cols-2 gap-3">
@@ -203,7 +213,7 @@ async function submit() {
         <span class="mb-1 block text-xs text-faint">Note</span>
         <input v-model="form.note" :class="inputCls" />
       </label>
-      <Button :disabled="saving || overpaying" @click="submit">{{ saving ? "Saving…" : "Record payment" }}</Button>
+      <Button :disabled="saving || overpaying || rosterFailed" @click="submit">{{ saving ? "Saving…" : "Record payment" }}</Button>
     </Card>
   </div>
 </template>

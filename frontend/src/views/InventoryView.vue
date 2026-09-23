@@ -20,17 +20,19 @@ import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import SellSheet from "@/components/SellSheet.vue";
+import Highlight from "@/components/ui/Highlight.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import { useServerList } from "@/lib/server-list";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const here = computed(() => route.fullPath);
 
 const { data: itemData, loading, error, reload } = useCachedAsync("inventory", () => api.get<InventoryItem[]>("/inventory"));
-const { data: saleData, reload: reloadSales } = useCachedAsync("sales", () => api.get<Sale[]>("/sales"));
 const { data: trainees } = useCachedAsync("trainees", () => api.get<Trainee[]>("/trainees?archived=include"));
 const items = computed(() => itemData.value ?? []);
-const sales = computed(() => saleData.value ?? []);
 
 type Show = "all" | "short" | "archived";
 const show = useQueryState<Show>("show", () => "all", (v): v is Show => ["all", "short", "archived"].includes(v as string));
@@ -41,30 +43,25 @@ const archivedCount = computed(() => items.value.length - activeItems.value.leng
 // One search over the shop: it narrows the stock list and the sales ledger
 // together, so "tee" shows the item and every tee that went out the door.
 const q = ref("");
-const term = computed(() => q.value.trim().toLowerCase());
+const term = computed(() => q.value.trim());
 const filteredItems = computed(() => {
   const base =
     show.value === "archived" ? items.value.filter((i) => !i.active)
     : show.value === "short" ? activeItems.value.filter((i) => shortage(i))
     : activeItems.value;
-  const hit = term.value
-    ? base.filter((i) => i.name.toLowerCase().includes(term.value) || (i.sku ?? "").toLowerCase().includes(term.value))
-    : base;
-  return [...hit].sort(byUrgency);
+  // A search ranks by match; otherwise shortages come first.
+  return term.value ? fuzzyFilter(base, term.value, (i) => [i.name, i.sku]) : [...base].sort(byUrgency);
 });
-const filteredSales = computed(() =>
-  term.value
-    ? sales.value.filter(
-        (s) => s.itemName.toLowerCase().includes(term.value) || (s.traineeName ?? "walk-in").toLowerCase().includes(term.value),
-      )
-    : sales.value,
-);
 const { page: itemPage, pageCount: itemPages, items: itemRows, total: itemTotal, from: itemFrom, to: itemTo } = usePaged(filteredItems, 10);
-const { page: salePage, pageCount: salePages, items: saleRows, total: saleTotal, from: saleFrom, to: saleTo } = usePaged(filteredSales, 10);
+// Sales are searched and paged by the API, over every sale — not just a page.
+const {
+  items: saleRows, total: saleTotal, page: salePage, pageCount: salePages, from: saleFrom, to: saleTo,
+  searching: salesSearching, reload: reloadSales,
+} = useServerList<Sale>((s) => `/sales${s ? `?q=${encodeURIComponent(s)}` : ""}`, term, 10);
 
 // Buyer picker: current trainees, searchable; "Walk-in" for no buyer.
 const buyers = computed(() =>
-  (trainees.value ?? []).filter((t) => t.status === "active" && !t.archivedAt).map((t) => ({ id: t.id, label: t.name })),
+  (trainees.value ?? []).filter((t) => t.status === "active" && !t.archivedAt).map(traineeOption),
 );
 
 // ── Add an item ────────────────────────────────────────────────────────────
@@ -139,7 +136,8 @@ async function sold(sale: Sale) {
     </Alert>
 
     <template v-else>
-      <SearchInput v-model="q" label="Search stock and sales" placeholder="Search stock and sales…" :matches="q ? filteredItems.length + filteredSales.length : undefined" />
+      <SearchInput v-model="q" label="Search stock and sales" placeholder="Search stock and sales…" :searching="salesSearching"
+        :matches="q && !salesSearching ? filteredItems.length + saleTotal : undefined" />
       <ChipGroup
         v-model="show"
         :options="[
@@ -170,7 +168,7 @@ async function sold(sale: Sale) {
             <div class="flex items-center gap-2 pr-2">
               <RouterLink :to="withBack(`/inventory/${i.id}`, here)" class="flex min-w-0 flex-1 items-center gap-3 p-3">
                 <div class="min-w-0 flex-1">
-                  <p class="truncate font-medium">{{ i.name }} <span v-if="i.sku" class="text-xs font-normal text-faint">· {{ i.sku }}</span></p>
+                  <p class="truncate font-medium"><Highlight :text="i.name" :q="q" /> <span v-if="i.sku" class="text-xs font-normal text-faint">· <Highlight :text="i.sku" :q="q" /></span></p>
                   <p class="text-xs text-faint tnum">{{ money(i.price) }} · <span :class="shortage(i) === 'out' ? 'text-overdue' : shortage(i) === 'low' ? 'text-partial' : ''">{{ i.stock }} in stock</span></p>
                 </div>
                 <Badge v-if="!i.active" tone="neutral">Archived</Badge>
@@ -189,9 +187,9 @@ async function sold(sale: Sale) {
         <Pagination v-model="itemPage" :page-count="itemPages" :total="itemTotal" :from="itemFrom" :to="itemTo" label="items" />
       </template>
 
-      <section v-if="sales.length > 0" class="space-y-2">
+      <section v-if="saleTotal > 0 || q" class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Sales</h2>
-        <p v-if="filteredSales.length === 0" class="px-1 text-sm text-faint">No sales match that.</p>
+        <p v-if="saleTotal === 0 && !salesSearching" class="px-1 text-sm text-faint">No sales match that.</p>
         <template v-else>
           <ul class="space-y-2">
             <li v-for="s in saleRows" :key="s.id">
@@ -201,11 +199,11 @@ async function sold(sale: Sale) {
               >
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">
-                    {{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span>
+                    <Highlight :text="s.itemName" :q="q" /> <span class="text-faint">×{{ s.qty }}</span>
                     <span v-if="s.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
                     <span v-else-if="s.returnedQty" class="ml-1 text-xs text-partial">{{ s.returnedQty }} returned</span>
                   </p>
-                  <p class="truncate text-xs text-faint">{{ s.traineeName || "Walk-in" }} · {{ formatLongDate(s.date) }}</p>
+                  <p class="truncate text-xs text-faint"><Highlight :text="s.traineeName || 'Walk-in'" :q="q" /> · {{ formatLongDate(s.date) }}</p>
                 </div>
                 <span class="font-display text-sm tnum" :class="s.voidedAt ? 'line-through text-faint' : ''">{{ money(s.total - (s.returnedTotal ?? 0)) }}</span>
               </RouterLink>

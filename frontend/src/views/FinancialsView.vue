@@ -18,6 +18,7 @@ import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import MonthPicker from "@/components/ui/MonthPicker.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
+import Highlight from "@/components/ui/Highlight.vue";
 import AuditTrail from "@/components/ui/AuditTrail.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import { btnClasses } from "@/components/ui/button";
@@ -96,7 +97,10 @@ const share = (v: number, total: number) => (total > 0 ? Math.max(2, Math.round(
 type Kind = "all" | "income" | "expense";
 const kind = useQueryState<Kind>("kind", () => "all", (v): v is Kind => ["all", "income", "expense"].includes(v as string));
 const typeFilter = useQueryState<string>("type", () => "");
-const q = ref("");
+// The search lives in the URL, so a result opened from global Search (or a
+// shared link) lands on the same filtered ledger, the record highlighted.
+const q = useQueryState<string>("q", () => "");
+const focusId = computed(() => (typeof route.query.focus === "string" ? route.query.focus : ""));
 const ledger = ref<LedgerRow[]>([]);
 const ledgerTotal = ref(0);
 const ledgerMore = ref(false);
@@ -377,7 +381,7 @@ const kindChips = [
 
       <ChipGroup v-model="kind" :options="kindChips" label="Show" />
       <div v-if="typeFilter" class="flex">
-        <button class="inline-flex min-h-9 items-center gap-1 rounded-lg border border-bronze/40 bg-bronze/10 px-2.5 text-xs text-bronze" @click="typeFilter = ''">
+        <button class="inline-flex min-h-10 items-center gap-1 rounded-lg border border-bronze/40 bg-bronze/10 px-2.5 text-xs text-bronze" @click="typeFilter = ''">
           {{ typeChipLabel }} <X class="h-3.5 w-3.5" /><span class="sr-only">Remove filter</span>
         </button>
       </div>
@@ -395,7 +399,12 @@ const kindChips = [
           {{ ledgerTotal }} row{{ ledgerTotal === 1 ? "" : "s" }} · in {{ money(ledgerTotals.income) }} · out {{ money(ledgerTotals.outgoings) }} · net {{ money(ledgerTotals.net) }} (voided rows shown, not counted)
         </p>
         <ul class="space-y-2">
-          <li v-for="r in ledger" :key="`${r.kind}-${r.id}`" class="rounded-xl border border-line bg-surface" :class="r.voided ? 'opacity-60' : ''">
+          <li
+            v-for="r in ledger"
+            :key="`${r.kind}-${r.id}`"
+            class="rounded-xl border bg-surface"
+            :class="[r.voided ? 'opacity-60' : '', r.id === focusId ? 'border-bronze ring-2 ring-bronze/30' : 'border-line']"
+          >
             <component
               :is="rowHref(r) ? RouterLink : 'button'"
               v-bind="rowHref(r) ? { to: withBack(rowHref(r)!, here) } : { type: 'button', 'aria-expanded': openExpense === r.id }"
@@ -404,10 +413,10 @@ const kindChips = [
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">
-                  {{ r.kind === "expense" ? categoryLabel(r.detail) : r.detail }}
+                  <Highlight :text="r.kind === 'expense' ? categoryLabel(r.detail) : r.detail" :q="q" />
                   <span v-if="r.voided" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
                 </p>
-                <p class="truncate text-xs text-faint">{{ formatLongDate(r.date) }} · {{ rowSub(r) }}</p>
+                <p class="truncate text-xs text-faint">{{ formatLongDate(r.date) }} · <Highlight :text="rowSub(r)" :q="q" /></p>
               </div>
               <span class="flex shrink-0 items-center gap-1">
                 <span class="font-display text-sm tnum" :class="[r.voided ? 'line-through text-faint' : r.out > 0 || r.in < 0 ? 'text-overdue' : 'text-fg']">

@@ -21,6 +21,7 @@ import { toast } from "@/lib/toast";
 import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
 import { errMsg } from "@/lib/api";
 import { btnClasses } from "@/components/ui/button";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const id = route.params.id as string;
@@ -46,7 +47,7 @@ const form = reactive({ qty: 1, trainee: "" });
 
 // Buyer options for the picker; a sale can also be a walk-in (no trainee).
 const traineeOptions = computed(() =>
-  (trainees.value ?? []).filter((t) => !t.archivedAt || t.id === sale.value?.trainee).map((t) => ({ id: t.id, label: t.name })),
+  (trainees.value ?? []).filter((t) => !t.archivedAt || t.id === sale.value?.trainee).map(traineeOption),
 );
 function startEdit() {
   if (!sale.value) return;
@@ -198,7 +199,7 @@ async function voidSale() {
           <button v-if="returnable > 0" :class="btnClasses('ghost', 'sm')" @click="startReturn"><RotateCcw class="h-4 w-4" /> Return items</button>
           <button
             :disabled="voiding"
-            class="inline-flex h-9 items-center gap-1.5 rounded-xl border border-purple/40 px-3 text-sm font-medium text-purple transition-colors hover:bg-purple/10 disabled:opacity-50"
+            class="inline-flex h-10 items-center gap-1.5 rounded-xl border border-purple/40 px-3 text-sm font-medium text-purple transition-colors hover:bg-purple/10 disabled:opacity-50"
             @click="voidSale"
           >
             <Undo2 class="h-4 w-4" /> {{ voiding ? "Voiding…" : "Void" }}

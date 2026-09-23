@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"bronzeboxing/internal/db"
+	"bronzeboxing/internal/fuzzy"
 	"bronzeboxing/internal/models"
 )
 
@@ -62,18 +63,18 @@ type ledgerRow struct {
 }
 
 type ledgerFilter struct {
-	Kind     string // payment | sale | return | expense | income (payment+sale+return) | ""
-	Type     string // payment type / expense category / "sale" / "return"
-	Method   string
-	Trainee  string
-	Voided   bool // include voided rows
-	Contains string
+	Kind    string // payment | sale | return | expense | income (payment+sale+return) | ""
+	Type    string // payment type / expense category / "sale" / "return"
+	Method  string
+	Trainee string
+	Voided  bool // include voided rows
+	Query   fuzzy.Query
 }
 
 func filterFromQuery(c *fiber.Ctx) ledgerFilter {
 	return ledgerFilter{
 		Kind: c.Query("kind"), Type: c.Query("type"), Method: c.Query("method"), Trainee: c.Query("trainee"),
-		Voided: c.Query("voided") != "0", Contains: strings.ToLower(strings.TrimSpace(c.Query("q"))),
+		Voided: c.Query("voided") != "0", Query: fuzzy.NewQuery(c.Query("q")),
 	}
 }
 
@@ -101,13 +102,13 @@ func (f ledgerFilter) keep(r ledgerRow) bool {
 	if !f.Voided && r.Voided {
 		return false
 	}
-	if f.Contains != "" {
-		hay := strings.ToLower(r.Detail + " " + r.Note + " " + r.Reference + " " + r.Type + " " + r.PeriodMonth)
-		if !strings.Contains(hay, f.Contains) {
-			return false
-		}
-	}
-	return true
+	return f.Query.Empty() || f.score(r) > 0
+}
+
+// score ranks a row against the search: its description first, then note,
+// reference, type and period.
+func (f ledgerFilter) score(r ledgerRow) int {
+	return fuzzy.Match(f.Query, fuzzy.NewTarget(r.Detail, r.Note, r.Reference, payTypeWord(r.Type), categoryWord(r.Type), r.PeriodMonth)).Score
 }
 
 // methodKey is how a row was paid, for the method split: payments carry it
@@ -345,6 +346,22 @@ func (h *ledgerHandler) ledger(c *fiber.Ctx) error {
 		if f.keep(rows[i]) {
 			kept = append(kept, rows[i])
 		}
+	}
+	if !f.Query.Empty() { // a search lists the best matches first
+		sc := make([]int, len(kept))
+		for i := range kept {
+			sc[i] = f.score(kept[i])
+		}
+		idx := make([]int, len(kept))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.SliceStable(idx, func(a, b int) bool { return sc[idx[a]] > sc[idx[b]] })
+		ranked := make([]ledgerRow, len(kept))
+		for i, j := range idx {
+			ranked[i] = kept[j]
+		}
+		kept = ranked
 	}
 	limit := min(max(atoiDefault(c.Query("limit"), 50), 1), 500)
 	offset := max(atoiDefault(c.Query("offset"), 0), 0)

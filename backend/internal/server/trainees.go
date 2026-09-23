@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"bronzeboxing/internal/db"
+	"bronzeboxing/internal/fuzzy"
 	"bronzeboxing/internal/models"
 )
 
@@ -84,9 +85,6 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 	defer cancel()
 
 	filter := bson.M{}
-	if q := strings.TrimSpace(c.Query("q")); q != "" {
-		filter["name"] = bson.M{"$regex": regexp.QuoteMeta(q), "$options": "i"}
-	}
 	// Archived former trainees stay out of the everyday roster unless asked for.
 	switch c.Query("archived") {
 	case "only":
@@ -103,6 +101,20 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 	out := []models.Trainee{}
 	if err := cur.All(ctx, &out); err != nil {
 		return err
+	}
+	// The roster is small and already loaded: rank it with the shared
+	// matcher (name or phone), best match first.
+	if q, ok := searchQuery(c); ok {
+		targets := make([]fuzzy.Target, len(out))
+		for i, t := range out {
+			targets[i] = fuzzy.NewTarget(t.Name, t.Phone)
+		}
+		ranked := fuzzy.Rank(q, targets)
+		hits := make([]models.Trainee, len(ranked))
+		for i, r := range ranked {
+			hits[i] = out[r.Index]
+		}
+		out = hits
 	}
 	return c.JSON(out)
 }
@@ -204,16 +216,19 @@ func (h *traineeHandler) update(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var in traineeInput
+	prev, err := loadTrainee(ctx, h.store, id.Hex(), "id")
+	if err != nil {
+		return notFound("trainee")
+	}
+	// Fields the body leaves out keep their current values, so a partial
+	// update (just a new phone number) can't blank the rest or zero the fee.
+	in := traineeInput{Name: prev.Name, Phone: prev.Phone, SkillLevel: prev.SkillLevel,
+		MonthlyFee: prev.MonthlyFee, Status: prev.Status, Notes: prev.Notes}
 	if err := c.BodyParser(&in); err != nil {
 		return badField("body", "invalid body")
 	}
 	if in, err = validateTrainee(in); err != nil {
 		return err
-	}
-	prev, err := loadTrainee(ctx, h.store, id.Hex(), "id")
-	if err != nil {
-		return notFound("trainee")
 	}
 	termsChanged := models.Cents(in.MonthlyFee) != models.Cents(prev.MonthlyFee) || in.Status != prev.Status
 	actor := actorOf(c)

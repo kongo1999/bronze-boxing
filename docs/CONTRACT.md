@@ -139,8 +139,35 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | GET/PUT/DELETE | `/reminders/:id` | Completing a recurring reminder creates the next instance |
 | POST | `/reminders/:id/snooze` | `{days}` or `{until}` |
 | GET | `/dashboard` | Adds `partialCount`, `unpaidCount`, `outstanding` |
-| GET | `/search?q=` | |
+| GET | `/search?q=&kinds=&limit=5&offset=` | `{query, groups[{kind, total, hasMore, items[{kind, id, label, sub, date, amount, flag, score, typo, month, trainee}]}], didYouMean?}` — kinds: trainee, session, payment, sale, item, expense, reminder (in that order). `flag` marks void / archived / inactive / cancelled / completed / done records. `didYouMean` is set when every match needed a typo. |
 | GET | `/audit/:entity/:id` | `entity` ∈ payment, expense, sale, charge, item, trainee, series, session, plan. Lines carry `actor` and `reason`. |
+
+### Search
+
+One matcher everywhere — `backend/internal/fuzzy` and its twin
+`frontend/src/lib/fuzzy.ts`, both tested against
+[`fixtures/fuzzy-cases.json`](fixtures/fuzzy-cases.json). Case, accents,
+punctuation, spacing and Arabic letter variants are normalized; ranking is
+exact > prefix > word prefix > substring > typo; one typo is allowed in a
+word of 3–7 letters (a 3-letter word must keep its first letter), two in
+longer ones; digits match exactly (phone fragments, references); words may be
+in any order; `PT` = private, `no show` = no-show, `tee` = t-shirt. Every
+query word must match, so unrelated records never appear.
+
+`?q=` on `/trainees`, `/payments`, `/sessions`, `/sales` and `/ledger`
+searches the whole filtered list on the server and returns it best match
+first, then pages it (`limit`/`offset` as usual) — a match that would sit on
+page five is still found. The list's other filters still apply.
+
+The server keeps an in-memory index of every searchable record, built on
+first use and kept current from a MongoDB change stream; before each search
+it writes a marker to `search_sync` and reads the stream up to it, so a
+write acknowledged before the search is always reflected (no stale results,
+whatever code path or tool made the write). Without a replica set (dev-only)
+it is rebuilt when older than two seconds instead.
+
+`PUT /trainees/:id` now merges: fields left out of the body keep their
+values (a partial update can no longer blank the phone or zero the fee).
 
 ## Frontend date handling
 

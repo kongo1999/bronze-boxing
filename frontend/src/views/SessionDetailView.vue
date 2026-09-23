@@ -18,9 +18,13 @@ import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import Button from "@/components/ui/Button.vue";
 import SearchSelect from "@/components/ui/SearchSelect.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Highlight from "@/components/ui/Highlight.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const router = useRouter();
@@ -171,7 +175,7 @@ async function openAdd() {
 }
 const addOptions = computed(() => {
   const inClass = new Set(session.value?.attendees.map((a) => a.trainee));
-  return roster.value.filter((t) => !inClass.has(t.id)).map((t) => ({ id: t.id, label: t.name }));
+  return roster.value.filter((t) => !inClass.has(t.id)).map(traineeOption);
 });
 watch(addPick, async (tid) => {
   if (!tid) return;
@@ -185,6 +189,20 @@ watch(addPick, async (tid) => {
     toast(errMsg(e, "Couldn't book that trainee."), "error");
   }
 });
+
+// Searching the class list and the series' dates, once they're long enough
+// to scroll. The same matcher as everywhere (typos, accents, "no show").
+const ATTENDANCE_SEARCH_AT = 6;
+const attQ = ref("");
+const statusWord: Record<string, string> = { booked: "booked", attended: "attended", no_show: "no-show" };
+const shownAttendees = computed(() =>
+  fuzzyFilter(session.value?.attendees ?? [], attQ.value, (a) => [a.traineeName, statusWord[a.status]]),
+);
+const seriesQ = ref("");
+const occLabel = (o: { start: string }) => `${formatDay(dayOf(o.start), { weekday: "short", month: "short", day: "numeric" })} · ${formatTime(o.start)}`;
+const shownOccurrences = computed(() =>
+  fuzzyFilter(series.value?.occurrences ?? [], seriesQ.value, (o) => [occLabel(o), o.attendanceNeeded ? "needs attendance" : o.status]),
+);
 
 // ── Series ────────────────────────────────────────────────────────────────
 const seriesOpen = ref(false);
@@ -369,12 +387,19 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
         <div v-if="adding">
           <SearchSelect v-model="addPick" :options="addOptions" placeholder="Pick a trainee to book" search-placeholder="Search trainees…" />
         </div>
+        <SearchInput
+          v-if="session.attendees.length >= ATTENDANCE_SEARCH_AT"
+          v-model="attQ"
+          label="Search this class"
+          placeholder="Find someone in this class…"
+          :matches="attQ ? shownAttendees.length : undefined"
+        />
         <ul class="space-y-2">
-          <li v-for="a in session.attendees" :key="a.trainee" class="rounded-xl border border-line bg-surface px-3 py-2">
+          <li v-for="a in shownAttendees" :key="a.trainee" class="rounded-xl border border-line bg-surface px-3 py-2">
             <div class="flex items-center gap-3">
               <Avatar :name="a.traineeName ?? '?'" class="h-8 w-8 text-xs" />
               <div class="min-w-0 flex-1">
-                <RouterLink :to="withBack(`/trainees/${a.trainee}`, here)" class="block truncate text-sm font-medium hover:underline">{{ a.traineeName }}</RouterLink>
+                <RouterLink :to="withBack(`/trainees/${a.trainee}`, here)" class="block truncate text-sm font-medium hover:underline"><Highlight :text="a.traineeName" :q="attQ" /></RouterLink>
                 <button
                   type="button"
                   class="text-left text-xs"
@@ -422,6 +447,7 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
             </div>
           </li>
           <li v-if="session.attendees.length === 0" class="px-1 text-sm text-faint">No one booked yet.</li>
+          <li v-else-if="!shownAttendees.length" class="px-1 text-sm text-faint">No one in this class matches “{{ attQ.trim() }}”.</li>
         </ul>
       </section>
 
@@ -438,14 +464,22 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
           </div>
           <button class="min-h-10 px-2 text-sm font-medium text-bronze hover:underline" :aria-expanded="seriesOpen" @click="seriesOpen = !seriesOpen">{{ seriesOpen ? "Hide" : "All dates" }}</button>
         </div>
+        <SearchInput
+          v-if="seriesOpen && series.occurrences.length >= ATTENDANCE_SEARCH_AT"
+          v-model="seriesQ"
+          label="Search this series' dates"
+          placeholder="e.g. oct 14, cancelled, needs attendance"
+          :matches="seriesQ ? shownOccurrences.length : undefined"
+        />
         <ul v-if="seriesOpen" class="max-h-72 space-y-1 overflow-y-auto">
-          <li v-for="o in series.occurrences" :key="o.id">
+          <li v-if="!shownOccurrences.length" class="px-2 text-sm text-faint">No dates match.</li>
+          <li v-for="o in shownOccurrences" :key="o.id">
             <RouterLink
               :to="withBack(`/schedule/${o.id}`, route.query.back as string || '/schedule')"
               class="flex min-h-10 items-center justify-between rounded-lg px-2 text-sm hover:bg-elevated"
               :class="o.id === session.id ? 'bg-bronze/10 text-bronze' : ''"
             >
-              <span :class="o.status === 'cancelled' ? 'line-through text-faint' : ''">{{ formatDay(dayOf(o.start), { weekday: "short", month: "short", day: "numeric" }) }} · {{ formatTime(o.start) }}</span>
+              <span :class="o.status === 'cancelled' ? 'line-through text-faint' : ''"><Highlight :text="occLabel(o)" :q="seriesQ" /></span>
               <span class="text-xs" :class="o.attendanceNeeded ? 'text-partial' : o.status === 'completed' ? 'text-paid' : 'text-faint'">
                 {{ o.attendanceNeeded ? "needs attendance" : o.status }}
               </span>

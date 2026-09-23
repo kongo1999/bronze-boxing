@@ -20,6 +20,8 @@ import EmptyState from "@/components/ui/EmptyState.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import MonthPicker from "@/components/ui/MonthPicker.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import Highlight from "@/components/ui/Highlight.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import ChipGroup, { type Chip } from "@/components/ui/ChipGroup.vue";
@@ -87,10 +89,8 @@ const counts = computed(() => countDues(subs.value));
 // the payments list together, so "Rami" answers both "did he pay?" and "what
 // has he paid?" at once — across the whole month, before paging.
 const q = ref("");
-const term = computed(() => q.value.trim().toLowerCase());
-const searchedSubs = computed(() =>
-  term.value ? subs.value.filter((s) => s.trainee.name.toLowerCase().includes(term.value)) : subs.value,
-);
+const term = computed(() => q.value.trim());
+const searchedSubs = computed(() => fuzzyFilter(subs.value, term.value, (s) => [s.trainee.name, s.trainee.phone]));
 const FILTER_STATES: Record<DuesFilter, SubState[] | null> = {
   all: null,
   partial: ["partial"],
@@ -100,15 +100,14 @@ const FILTER_STATES: Record<DuesFilter, SubState[] | null> = {
 };
 const filteredSubs = computed(() => {
   const want = FILTER_STATES[filter.value];
-  return searchedSubs.value.filter((s) => !want || want.includes(s.state)).slice().sort(byUrgency);
+  const rows = searchedSubs.value.filter((s) => !want || want.includes(s.state));
+  return term.value ? rows : rows.slice().sort(byUrgency); // a search keeps best-match order
 });
-const filteredPayments = computed(() => {
-  if (!term.value) return payments.value;
-  return payments.value.filter((p) =>
-    [p.traineeName, p.note, p.reference, payTypeLabel(p.type), p.periodMonth, methodLabel(p.method)]
-      .some((f) => (f ?? "").toLowerCase().includes(term.value)),
-  );
-});
+const filteredPayments = computed(() =>
+  fuzzyFilter(payments.value, term.value, (p) => [
+    p.traineeName || payTypeLabel(p.type), p.note, p.reference, payTypeLabel(p.type), p.periodMonth, methodLabel(p.method),
+  ]),
+);
 // Destructured (not kept as objects) so the template reads the refs directly.
 const { page: subPage, pageCount: subPages, items: subItems, total: subTotal, from: subFrom, to: subTo } = usePaged(filteredSubs, 8);
 const { page: payPage, pageCount: payPages, items: payItems, total: payTotal, from: payFrom, to: payTo } = usePaged(filteredPayments, 10);
@@ -284,7 +283,7 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
                   <Avatar :name="s.trainee.name" class="h-8 w-8 text-xs" />
                   <div class="min-w-0">
                     <p class="truncate text-sm font-medium">
-                      {{ s.trainee.name }}
+                      <Highlight :text="s.trainee.name" :q="term" />
                       <span v-if="s.trainee.status !== 'active'" class="text-xs font-normal text-faint">· {{ s.trainee.status }}</span>
                     </p>
                     <p class="text-xs text-faint tnum">
@@ -343,7 +342,7 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
               >
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">
-                    {{ p.traineeName || "—" }}
+                    <Highlight :text="p.traineeName || '—'" :q="term" />
                     <span v-if="p.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
                   </p>
                   <p class="truncate text-xs text-faint">

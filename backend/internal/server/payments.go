@@ -123,6 +123,10 @@ func (h *paymentHandler) list(c *fiber.Ctx) error {
 	if typ := c.Query("type"); typ != "" {
 		filter["type"] = typ
 	}
+	if q, ok := searchQuery(c); ok {
+		return rankedFind(c, ctx, h.store, models.CollPayments, kindPayment, filter, q,
+			func(p models.Payment) primitive.ObjectID { return p.ID })
+	}
 	if len(filter) == 0 && c.Query("limit") == "" {
 		return badField("m", "give a month, a date range, a trainee or a period (or page with limit)")
 	}

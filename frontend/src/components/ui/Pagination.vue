@@ -18,7 +18,7 @@ const noun = computed(() => props.label ?? "items");
 const canPrev = computed(() => page.value > 1);
 const canNext = computed(() => page.value < props.pageCount);
 const btn =
-  "grid h-8 w-8 place-items-center rounded-lg border border-line text-muted transition-colors " +
+  "grid h-10 w-10 place-items-center rounded-lg border border-line text-muted transition-colors " +
   "hover:border-bronze/40 hover:text-fg disabled:pointer-events-none disabled:opacity-35";
 </script>
 

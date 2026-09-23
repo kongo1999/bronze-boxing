@@ -22,6 +22,8 @@ import Alert from "@/components/ui/Alert.vue";
 import Button from "@/components/ui/Button.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import PlanCard from "@/components/PlanCard.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Highlight from "@/components/ui/Highlight.vue";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
@@ -174,17 +176,34 @@ watch(
 );
 
 // ── Sessions: upcoming + attendance history ───────────────────────────────
+// One search over this trainee's history (attendance, payments, purchases),
+// run by the API over everything they have — not just the rows on screen.
+const histQ = ref("");
+const hq = () => (histQ.value.trim() ? `&q=${encodeURIComponent(histQ.value.trim())}` : "");
+let histTimer: ReturnType<typeof setTimeout> | undefined;
+watch(histQ, () => {
+  clearTimeout(histTimer);
+  histTimer = setTimeout(() => {
+    loadSessions();
+    loadPayments();
+    loadPurchases();
+  }, 200);
+});
+
 const upcoming = ref<Session[]>([]);
 const history = ref<Session[]>([]);
 const historyTotal = ref(0);
 const historyMore = ref(false);
+let sessToken = 0;
 async function loadSessions(append = false) {
   const now = new Date().toISOString();
+  const my = ++sessToken;
   try {
     const [up, past] = await Promise.all([
       append ? Promise.resolve(upcoming.value) : api.get<Session[]>(`/sessions?trainee=${id}&from=${encodeURIComponent(now)}`),
-      api.get<Page<Session>>(`/sessions?trainee=${id}&to=${encodeURIComponent(now)}&order=desc&limit=10&offset=${append ? history.value.length : 0}`),
+      api.get<Page<Session>>(`/sessions?trainee=${id}&to=${encodeURIComponent(now)}&order=desc&limit=10&offset=${append ? history.value.length : 0}${hq()}`),
     ]);
+    if (my !== sessToken) return;
     upcoming.value = up.filter((s) => s.status !== "cancelled").slice(0, 5);
     history.value = append ? [...history.value, ...past.items] : past.items;
     historyTotal.value = past.total;
@@ -202,9 +221,12 @@ const noShows = computed(() => history.value.filter((s) => myStatus(s) === "no_s
 const payments = ref<Payment[]>([]);
 const paymentsTotal = ref(0);
 const paymentsMore = ref(false);
+let payToken = 0;
 async function loadPayments(append = false) {
+  const my = ++payToken;
   try {
-    const pg = await api.get<Page<Payment>>(`/payments?trainee=${id}&limit=8&offset=${append ? payments.value.length : 0}`);
+    const pg = await api.get<Page<Payment>>(`/payments?trainee=${id}&limit=8&offset=${append ? payments.value.length : 0}${hq()}`);
+    if (my !== payToken) return;
     payments.value = append ? [...payments.value, ...pg.items] : pg.items;
     paymentsTotal.value = pg.total;
     paymentsMore.value = pg.hasMore;
@@ -214,7 +236,20 @@ async function loadPayments(append = false) {
 }
 loadPayments();
 const purchases = ref<Sale[]>([]);
-api.get<Sale[]>(`/sales?trainee=${id}`).then((s) => (purchases.value = s)).catch(() => {});
+const purchasesTotal = ref(0);
+let buyToken = 0;
+function loadPurchases() {
+  const my = ++buyToken;
+  api
+    .get<Page<Sale>>(`/sales?trainee=${id}&limit=10${hq()}`)
+    .then((pg) => {
+      if (my !== buyToken) return;
+      purchases.value = pg.items;
+      purchasesTotal.value = pg.total;
+    })
+    .catch(() => {});
+}
+loadPurchases();
 
 // ── Archive / delete ──────────────────────────────────────────────────────
 const busy = ref(false);
@@ -322,7 +357,7 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <RouterLink :to="withBack(`/trainees/${id}/edit`, here)" :class="btnClasses('ghost', 'sm')"><Pencil class="h-4 w-4" /> Edit</RouterLink>
           <button v-if="!trainee.archivedAt" :class="btnClasses('ghost', 'sm')" :disabled="busy" @click="archive"><Archive class="h-4 w-4" /> Archive</button>
           <button v-else :class="btnClasses('ghost', 'sm')" :disabled="busy" @click="unarchive"><ArchiveRestore class="h-4 w-4" /> Restore</button>
-          <button class="inline-flex min-h-9 items-center gap-1 px-2 text-xs text-faint hover:text-overdue" :disabled="busy" @click="remove"><Trash2 class="h-3.5 w-3.5" /> Delete</button>
+          <button class="inline-flex min-h-10 items-center gap-1 px-2 text-xs text-faint hover:text-overdue" :disabled="busy" @click="remove"><Trash2 class="h-3.5 w-3.5" /> Delete</button>
         </div>
       </Card>
 
@@ -359,7 +394,7 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <div class="flex flex-wrap gap-2">
             <button :class="btnClasses('ghost', 'sm')" :aria-expanded="assigning === p.id" @click="openAssign(p)">Assign sessions</button>
             <RouterLink :to="withBack('/schedule/new', here, { attendee: id, plan: p.id, day: todayKey() })" :class="btnClasses('ghost', 'sm')">Book toward it</RouterLink>
-            <button class="min-h-9 px-2 text-xs text-faint hover:text-fg" @click="closePlan(p, 'completed')">Mark completed</button>
+            <button class="min-h-10 px-2 text-xs text-faint hover:text-fg" @click="closePlan(p, 'completed')">Mark completed</button>
           </div>
           <div v-if="assigning === p.id" class="space-y-2 rounded-xl bg-elevated p-3">
             <p v-if="!candidates.length" class="text-xs text-faint">No unassigned bookings of {{ trainee.name }} fall in this plan's dates.</p>
@@ -379,7 +414,7 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
         </button>
         <Card v-for="p in showPastPlans ? pastPlans : []" :key="p.id" class="space-y-2 p-4 opacity-80">
           <PlanCard :plan="p" />
-          <button class="min-h-9 px-1 text-xs text-faint hover:text-fg" @click="closePlan(p, 'active')">Reopen</button>
+          <button class="min-h-10 px-1 text-xs text-faint hover:text-fg" @click="closePlan(p, 'active')">Reopen</button>
         </Card>
       </section>
 
@@ -427,17 +462,19 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
         </RouterLink>
       </section>
 
+      <SearchInput v-model="histQ" label="Search this trainee's history" placeholder="Search history — sessions, payments, purchases…" />
+
       <!-- Attendance history -->
       <section class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">
-          Attendance<template v-if="historyTotal"> · {{ attended }} attended · {{ noShows }} no-show{{ noShows === 1 ? "" : "s" }} in the last {{ history.length }}</template>
+          Attendance<template v-if="histQ.trim()"> · {{ historyTotal }} matching</template><template v-else-if="historyTotal"> · {{ attended }} attended · {{ noShows }} no-show{{ noShows === 1 ? "" : "s" }} in the last {{ history.length }}</template>
         </h2>
-        <p v-if="!history.length" class="px-1 text-sm text-faint">No past sessions yet.</p>
+        <p v-if="!history.length" class="px-1 text-sm text-faint">{{ histQ.trim() ? "No sessions match." : "No past sessions yet." }}</p>
         <ul class="space-y-2">
           <li v-for="s in history" :key="s.id">
             <RouterLink :to="withBack(`/schedule/${s.id}`, here)" class="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 hover:border-bronze/30" :class="s.status === 'cancelled' ? 'opacity-50' : ''">
               <div class="min-w-0">
-                <p class="truncate text-sm">{{ s.title }}</p>
+                <p class="truncate text-sm"><Highlight :text="s.title" :q="histQ" /></p>
                 <p class="text-xs text-faint">{{ formatDay(dayOf(s.start), { weekday: "short", month: "short", day: "numeric" }) }}<template v-if="s.status === 'cancelled'"> · cancelled</template></p>
               </div>
               <Badge v-if="s.status !== 'cancelled'" :tone="attendanceTone(myStatus(s))">{{ attendanceLabel(myStatus(s)) }}</Badge>
@@ -452,13 +489,13 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
       <!-- Payments (all types), paged on the server -->
       <section class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Payments<template v-if="paymentsTotal"> · {{ paymentsTotal }}</template></h2>
-        <p v-if="!payments.length" class="px-1 text-sm text-faint">No payments recorded yet.</p>
+        <p v-if="!payments.length" class="px-1 text-sm text-faint">{{ histQ.trim() ? "No payments match." : "No payments recorded yet." }}</p>
         <ul class="space-y-2">
           <li v-for="p in payments" :key="p.id">
             <RouterLink :to="withBack(`/payments/${p.id}`, here)" class="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 hover:border-bronze/30" :class="p.voidedAt ? 'opacity-60' : ''">
               <div class="min-w-0">
                 <p class="text-sm font-medium">
-                  {{ payTypeLabel(p.type) }}
+                  <Highlight :text="payTypeLabel(p.type)" :q="histQ" /><template v-if="p.note"> · <span class="font-normal text-muted"><Highlight :text="p.note" :q="histQ" /></span></template>
                   <span v-if="p.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
                 </p>
                 <p class="text-xs text-faint">{{ formatLongDate(p.date) }}{{ p.periodMonth ? ` · for ${monthLabel(p.periodMonth)}` : "" }} · {{ methodLabel(p.method) }}</p>
@@ -473,12 +510,13 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
       </section>
 
       <!-- Purchases -->
-      <section v-if="purchases.length" class="space-y-2">
-        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Purchases · {{ purchases.length }}</h2>
+      <section v-if="purchases.length || histQ.trim()" class="space-y-2">
+        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Purchases · {{ purchasesTotal }}</h2>
+        <p v-if="!purchases.length" class="px-1 text-sm text-faint">No purchases match.</p>
         <ul class="space-y-2">
-          <li v-for="s in purchases.slice(0, 10)" :key="s.id">
+          <li v-for="s in purchases" :key="s.id">
             <RouterLink :to="withBack(`/sales/${s.id}`, here)" class="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 hover:border-bronze/30" :class="s.voidedAt ? 'opacity-60' : ''">
-              <span class="min-w-0 truncate text-sm">{{ s.itemName }} <span class="text-faint">×{{ s.qty }}</span></span>
+              <span class="min-w-0 truncate text-sm"><Highlight :text="s.itemName" :q="histQ" /> <span class="text-faint">×{{ s.qty }}</span></span>
               <span class="shrink-0 text-xs text-faint">{{ formatLongDate(s.date) }} · <span class="tnum text-fg" :class="s.voidedAt ? 'line-through' : ''">{{ money(s.total) }}</span></span>
             </RouterLink>
           </li>

@@ -14,7 +14,7 @@ export function btnClasses(variant: BtnVariant = "primary", size: BtnSize = "md"
     "disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:hover:translate-y-0";
   const sizes: Record<BtnSize, string> = {
     md: "h-11 px-4 text-sm",
-    sm: "h-9 px-3 text-sm",
+    sm: "h-10 px-3 text-sm",
     icon: "h-10 w-10",
   };
   const variants: Record<BtnVariant, string> = {

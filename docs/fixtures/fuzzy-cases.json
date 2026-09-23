@@ -1,0 +1,124 @@
+{
+  "_about": "Shared search cases. backend/internal/fuzzy and frontend/src/lib/fuzzy.ts must both return exactly `expect` (in order) for each query over `targets` ([main text, other fields...]); every other target must not match. `didYouMean` is the corrected query when every result needed a typo.",
+  "cases": [
+    {
+      "name": "exact word beats prefix beats word prefix beats substring",
+      "q": "sam",
+      "targets": [["Osama Sam"], ["Sami Dabboussi"], ["Sam Haddad"], ["Hassam Ali"], ["Rami Khoury"]],
+      "expect": ["Sam Haddad", "Sami Dabboussi", "Osama Sam", "Hassam Ali"]
+    },
+    {
+      "name": "transposed letters in a short name",
+      "q": "jda saliba",
+      "targets": [["Jad Saliba"], ["Jana Salem"], ["Nadia Jaber"]],
+      "expect": ["Jad Saliba"],
+      "didYouMean": "jad saliba"
+    },
+    {
+      "name": "missing letter",
+      "q": "salba",
+      "targets": [["Jad Saliba"], ["Sami Dabboussi"]],
+      "expect": ["Jad Saliba"],
+      "didYouMean": "saliba"
+    },
+    {
+      "name": "partial phone number, and digits never typo-match",
+      "q": "5556",
+      "targets": [["Jad Saliba", "70 555 666"], ["Karim Haddad", "03 111 222"], ["Lara Fares", "71 555 7"]],
+      "expect": ["Jad Saliba"]
+    },
+    {
+      "name": "SKU fragment",
+      "q": "glv",
+      "targets": [["Boxing Gloves 12oz", "GLV-12"], ["Hand Wraps (4.5m)", "WRAP-45"]],
+      "expect": ["Boxing Gloves 12oz"]
+    },
+    {
+      "name": "reordered words",
+      "q": "saliba jad",
+      "targets": [["Jad Saliba"], ["Jad Haddad"]],
+      "expect": ["Jad Saliba"]
+    },
+    {
+      "name": "alias: PT means private",
+      "q": "pt jad",
+      "targets": [["Private session — Jad"], ["Evening Group Class"], ["Jad Saliba"]],
+      "expect": ["Private session — Jad"]
+    },
+    {
+      "name": "alias: no show, no-show and noshow are one word",
+      "q": "no show",
+      "targets": [["No-show"], ["Showcase night"], ["Nour Aoun"]],
+      "expect": ["No-show"]
+    },
+    {
+      "name": "one typo",
+      "q": "gloevs",
+      "targets": [["Boxing Gloves 12oz"], ["Bronze Boxing Tee"]],
+      "expect": ["Boxing Gloves 12oz"],
+      "didYouMean": "gloves"
+    },
+    {
+      "name": "two typos in a long word",
+      "q": "dabbousy",
+      "targets": [["Sami Dabboussi"], ["Jad Saliba"]],
+      "expect": ["Sami Dabboussi"],
+      "didYouMean": "dabboussi"
+    },
+    {
+      "name": "accents are ignored",
+      "q": "jose",
+      "targets": [["Joseph Aoun"], ["José Haddad"], ["Jana Salem"]],
+      "expect": ["José Haddad", "Joseph Aoun"]
+    },
+    {
+      "name": "accents in the query are ignored too",
+      "q": "Tárek",
+      "targets": [["Tarek Mansour"]],
+      "expect": ["Tarek Mansour"]
+    },
+    {
+      "name": "Arabic hamza forms fold",
+      "q": "احمد",
+      "targets": [["أحمد خوري"], ["مروان"]],
+      "expect": ["أحمد خوري"]
+    },
+    {
+      "name": "Arabic ta marbuta folds",
+      "q": "فاطمه",
+      "targets": [["فاطمة"]],
+      "expect": ["فاطمة"]
+    },
+    {
+      "name": "unrelated text never matches",
+      "q": "xyz",
+      "targets": [["Jad Saliba"], ["Boxing Gloves"], ["Lara Fares"]],
+      "expect": []
+    },
+    {
+      "name": "every word must match, across fields",
+      "q": "jad gloves",
+      "targets": [["Boxing Gloves 12oz", "Karim Haddad"], ["Boxing Gloves 12oz", "Jad Saliba"]],
+      "expect": ["Boxing Gloves 12oz"]
+    },
+    {
+      "name": "two letters: prefixes only, ties by length then text",
+      "q": "ja",
+      "targets": [["Raja Khoury"], ["Nadia Jaber"], ["Jana Salem"], ["Jad Saliba"]],
+      "expect": ["Jad Saliba", "Jana Salem", "Nadia Jaber"]
+    },
+    {
+      "name": "tee also finds t-shirts (a prefix of the whole name still ranks first)",
+      "q": "tee",
+      "targets": [["Bronze T-Shirt"], ["Teeth guard"], ["Water bottle"]],
+      "expect": ["Teeth guard", "Bronze T-Shirt"]
+    },
+    {
+      "name": "a three-letter typo must keep its first letter",
+      "q": "sad",
+      "targets": [["Jad Saliba"], ["Saad Haddad"]],
+      "expect": ["Saad Haddad"],
+      "didYouMean": "saad"
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import ChipGroup from "@/components/ui/ChipGroup.vue";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { traineeOption } from "@/lib/options";
 
 const route = useRoute();
 const id = route.params.id as string;
@@ -69,7 +70,7 @@ async function startEdit() {
   }
 }
 const traineeOptions = computed(() => {
-  const opts = trainees.value.map((t) => ({ id: t.id, label: t.name, sub: t.status === "inactive" ? "inactive" : undefined }));
+  const opts = trainees.value.map(traineeOption);
   const p = payment.value;
   if (p?.trainee && !opts.some((o) => o.id === p.trainee)) opts.unshift({ id: p.trainee, label: p.traineeName ?? "—", sub: undefined });
   return opts;
