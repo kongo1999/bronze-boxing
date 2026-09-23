@@ -475,5 +475,47 @@ func VerifyIntegrity(ctx context.Context, store *db.Store) ([]Finding, error) {
 			out = append(out, Finding{"stock_mismatch", fmt.Sprintf("%s: stock %d but ledger adds up to %d", it.Name, it.Stock, rows[0].Sum)})
 		}
 	}
+	// Each sale's running return totals match its return records.
+	ragg, err := store.Coll(models.CollReturns).Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$group", Value: bson.M{"_id": "$sale", "qty": bson.M{"$sum": "$qty"}, "n": bson.M{"$sum": 1}}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rsums []struct {
+		Sale primitive.ObjectID `bson:"_id"`
+		Qty  int                `bson:"qty"`
+	}
+	if err := ragg.All(ctx, &rsums); err != nil {
+		return nil, err
+	}
+	returned := map[primitive.ObjectID]int{}
+	for _, r := range rsums {
+		returned[r.Sale] = r.Qty
+	}
+	scur, err := store.Coll(models.CollSales).Find(ctx, bson.M{"$or": bson.A{
+		bson.M{"returnedQty": bson.M{"$gt": 0}}, bson.M{"_id": bson.M{"$in": keysOf(returned)}},
+	}})
+	if err != nil {
+		return nil, err
+	}
+	var rsales []models.Sale
+	if err := scur.All(ctx, &rsales); err != nil {
+		return nil, err
+	}
+	for _, s := range rsales {
+		if s.ReturnedQty != returned[s.ID] || s.ReturnedQty > s.Qty {
+			out = append(out, Finding{"sale_returns_mismatch", fmt.Sprintf("sale %s (%s × %d): returnedQty %d but returns add up to %d",
+				s.ID.Hex(), s.ItemName, s.Qty, s.ReturnedQty, returned[s.ID])})
+		}
+	}
 	return out, nil
+}
+
+func keysOf[K comparable, V any](m map[K]V) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

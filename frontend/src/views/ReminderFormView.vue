@@ -15,6 +15,7 @@ import { inputCls } from "@/lib/ui";
 import { isDayKey, todayKey } from "@/lib/studio";
 import { backTarget } from "@/lib/route-state";
 import { toast } from "@/lib/toast";
+import { refreshBadges } from "@/lib/badges";
 
 const route = useRoute();
 const router = useRouter();
@@ -110,6 +111,7 @@ async function submit() {
   try {
     if (isEdit) await api.put(`/reminders/${editId}`, body);
     else await api.post("/reminders", body);
+    refreshBadges(true);
     invalidate("reminders", "dashboard");
     if (isEdit) toast("Reminder updated.", "success");
     router.push(back());

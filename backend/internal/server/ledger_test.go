@@ -213,7 +213,8 @@ func TestReturnsCountInTheirOwnMonthAndDieWithTheirSale(t *testing.T) {
 	it := e.addItem("Gloves", 5, 45, 28)
 	var s saleOut
 	e.ok("POST", "/inventory/"+it.ID+"/sell", map[string]any{"qty": 2}, &s)
-	// A return dated next month (inserted directly; Phase 5 adds the endpoint).
+	// A return dated next month, inserted directly: the endpoint refuses
+	// future-dated refunds, and this checks which month a return lands in.
 	if _, err := e.store.Coll(models.CollReturns).InsertOne(e.ctx, models.SaleReturn{
 		Sale: oid(t, s.ID), Item: oid(t, it.ID), ItemName: "Gloves", Qty: 1, Amount: 45,
 		Date: nextStart.Add(36 * time.Hour), Reason: "wrong size", CreatedAt: nowFn(),

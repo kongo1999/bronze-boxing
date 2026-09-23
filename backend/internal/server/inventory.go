@@ -30,8 +30,14 @@ func registerInventory(r fiber.Router, store *db.Store) {
 	g.Delete("/:id", h.remove)
 	g.Post("/:id/sell", h.sell)
 	g.Get("/:id/movements", h.movements)
+	g.Post("/:id/adjustments", h.adjust)
+	g.Post("/:id/archive", h.setActive(false))
+	g.Post("/:id/unarchive", h.setActive(true))
 	r.Get("/sales", h.sales)
 	r.Get("/sales/:id", h.getSale)
+	r.Get("/sales/:id/receipt", h.saleReceipt)
+	r.Get("/sales/:id/returns", h.listReturns)
+	r.Post("/sales/:id/returns", h.returnSale)
 	r.Put("/sales/:id", h.correctSale)        // correct qty / buyer (adjusts stock)
 	r.Post("/sales/:id/void", h.voidSalePost) // void a sale (restocks)
 	r.Delete("/sales/:id", h.voidSale)        // legacy spelling of void
@@ -48,17 +54,44 @@ type inventoryInput struct {
 	Reason            string  `json:"reason"` // required when a PUT changes stock
 }
 
+// list returns the shop's items by name. Filters: ?active=true|false,
+// ?stock=short (low or out) | low | out.
 func (h *inventoryHandler) list(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
+	filter := bson.M{}
+	switch c.Query("active") {
+	case "":
+	case "true":
+		filter["active"] = bson.M{"$ne": false}
+	case "false":
+		filter["active"] = false
+	default:
+		return badField("active", "active must be true or false")
+	}
+	stock := c.Query("stock")
+	if stock != "" {
+		if err := oneOf("stock", stock, "short", "low", "out"); err != nil {
+			return err
+		}
+	}
 	cur, err := h.store.Coll(models.CollInventory).
-		Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return err
 	}
-	out := []models.InventoryItem{}
-	if err := cur.All(ctx, &out); err != nil {
+	all := []models.InventoryItem{}
+	if err := cur.All(ctx, &all); err != nil {
 		return err
+	}
+	if stock == "" {
+		return c.JSON(all)
+	}
+	out := []models.InventoryItem{}
+	for _, it := range all {
+		if s := it.Shortage(); s != "" && (stock == "short" || stock == s) {
+			out = append(out, it)
+		}
 	}
 	return c.JSON(out)
 }
@@ -251,6 +284,10 @@ func (h *inventoryHandler) update(c *fiber.Ctx) error {
 	return c.JSON(item)
 }
 
+// remove deletes an item only while nothing has happened to it: no sales
+// and no stock movement beyond its opening line (e.g. one added by
+// mistake). An item with history is archived instead, so its stock ledger
+// and old sales keep pointing at a real record.
 func (h *inventoryHandler) remove(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -258,7 +295,34 @@ func (h *inventoryHandler) remove(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if _, err := h.store.Coll(models.CollInventory).DeleteOne(ctx, bson.M{"_id": id}); err != nil {
+	actor := actorOf(c)
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		it, err := findItem(tx, h.store, id)
+		if err != nil {
+			return err
+		}
+		sales, err := h.store.Coll(models.CollSales).CountDocuments(tx, bson.M{"item": id})
+		if err != nil {
+			return err
+		}
+		moves, err := h.store.Coll(models.CollMovements).CountDocuments(tx, bson.M{"item": id, "kind": bson.M{"$ne": models.MoveOpening}})
+		if err != nil {
+			return err
+		}
+		if sales > 0 || moves > 0 {
+			return apiErr(http.StatusConflict, CodeConflict,
+				fmt.Sprintf("%s has sales or stock history — archive it instead so that history stays linked", it.Name)).
+				withDetails(map[string]int64{"sales": sales, "movements": moves})
+		}
+		if _, err := h.store.Coll(models.CollInventory).DeleteOne(tx, bson.M{"_id": id}); err != nil {
+			return err
+		}
+		if _, err := h.store.Coll(models.CollMovements).DeleteMany(tx, bson.M{"item": id, "kind": models.MoveOpening}); err != nil {
+			return err
+		}
+		return writeAudit(tx, h.store, auditLine{Entity: "item", Ref: id, Action: "delete", Before: it, Actor: actor})
+	})
+	if err != nil {
 		return err
 	}
 	return c.JSON(fiber.Map{"ok": true})
@@ -289,6 +353,7 @@ type sellInput struct {
 	Trainee     string   `json:"trainee"`
 	UnitPrice   *float64 `json:"unitPrice"`
 	PriceReason string   `json:"priceReason"` // required when unitPrice differs from the list price
+	Method      string   `json:"method"`      // how the buyer paid; cash when empty
 }
 
 // takeStock atomically removes qty from an item — only if it is active and
@@ -335,6 +400,11 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 	if in.Qty <= 0 {
 		return badField("qty", "quantity must be at least 1")
 	}
+	if in.Method != "" {
+		if err := oneOf("method", in.Method, payMethods...); err != nil {
+			return err
+		}
+	}
 	item, err := findItem(ctx, h.store, id)
 	if err != nil {
 		return err
@@ -362,6 +432,7 @@ func (h *inventoryHandler) sell(c *fiber.Ctx) error {
 		UnitCost:    round2(item.CostPrice),
 		ListPrice:   round2(item.Price),
 		PriceReason: priceReason,
+		Method:      in.Method,
 		Total:       models.Amount(models.Cents(unit) * int64(in.Qty)),
 		Date:        now,
 		CreatedAt:   now,
@@ -427,16 +498,8 @@ func (h *inventoryHandler) sales(c *fiber.Ctx) error {
 		}
 		filter["item"] = iid
 	}
-	cur, err := h.store.Coll(models.CollSales).
-		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}}))
-	if err != nil {
-		return err
-	}
-	out := []models.Sale{}
-	if err := cur.All(ctx, &out); err != nil {
-		return err
-	}
-	return c.JSON(out)
+	return pagedFind[models.Sale](c, ctx, h.store.Coll(models.CollSales), filter,
+		bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}})
 }
 
 func findSale(ctx context.Context, store *db.Store, id primitive.ObjectID) (models.Sale, error) {

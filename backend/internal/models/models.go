@@ -237,6 +237,18 @@ type InventoryItem struct {
 	UpdatedAt         time.Time          `bson:"updatedAt" json:"updatedAt"`
 }
 
+// Shortage says whether an item needs restocking: "out" when none is left,
+// "low" at or under its threshold (when one is set), otherwise "".
+func (i InventoryItem) Shortage() string {
+	switch {
+	case i.Stock <= 0:
+		return "out"
+	case i.LowStockThreshold > 0 && i.Stock <= i.LowStockThreshold:
+		return "low"
+	}
+	return ""
+}
+
 type Sale struct {
 	ID          primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
 	Item        primitive.ObjectID  `bson:"item" json:"item"`

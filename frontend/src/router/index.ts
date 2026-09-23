@@ -28,7 +28,9 @@ const routes = [
   { path: "/financials", name: "financials", component: () => import("@/views/FinancialsView.vue") },
   { path: "/financials/reconcile", name: "reconcile", component: () => import("@/views/ReconcileView.vue") },
   { path: "/inventory", name: "inventory", component: () => import("@/views/InventoryView.vue") },
+  { path: "/inventory/:id", name: "inventory-item", component: () => import("@/views/InventoryItemView.vue") },
   { path: "/sales/:id", name: "sale-detail", component: () => import("@/views/SaleDetailView.vue") },
+  { path: "/sales/:id/receipt", name: "sale-receipt", component: () => import("@/views/SaleReceiptView.vue") },
   { path: "/search", name: "search", component: () => import("@/views/SearchView.vue") },
 
   { path: "/:pathMatch(.*)*", redirect: "/" },

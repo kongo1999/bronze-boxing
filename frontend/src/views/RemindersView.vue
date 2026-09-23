@@ -16,6 +16,7 @@ import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import { refreshBadges } from "@/lib/badges";
 
 const route = useRoute();
 const { data, loading, error, reload } = useCachedAsync("reminders", () => api.get<Reminder[]>("/reminders"));
@@ -67,7 +68,7 @@ function dueLabel(r: Reminder): string {
 const relatedHref = (r: Reminder) =>
   r.relatedType === "trainee" ? `/trainees/${r.relatedId}`
   : r.relatedType === "session" ? `/schedule/${r.relatedId}`
-  : r.relatedType === "item" ? `/inventory?focus=${r.relatedId}`
+  : r.relatedType === "item" ? `/inventory/${r.relatedId}`
   : "";
 
 // Optimistic: flip the UI immediately, fire one request, revert only on
@@ -77,6 +78,7 @@ async function toggle(r: Reminder) {
   r.done = next;
   try {
     await api.put(`/reminders/${r.id}`, { done: next });
+    refreshBadges(true);
     invalidate("dashboard");
     if (r.recurrence) reload();
     else if (data.value) writeCache("reminders", data.value);
@@ -88,6 +90,7 @@ async function toggle(r: Reminder) {
 async function snooze(r: Reminder, days: number) {
   try {
     const updated = await api.post<Reminder>(`/reminders/${r.id}/snooze`, { days });
+    refreshBadges(true);
     Object.assign(r, updated);
     if (data.value) writeCache("reminders", data.value);
     toast(`Snoozed until ${formatDay(updated.snoozedUntil ?? "", { weekday: "short", month: "short", day: "numeric" })}.`, "success");
@@ -103,6 +106,7 @@ async function remove(r: Reminder) {
   if (idx >= 0) list.splice(idx, 1); // optimistic removal
   try {
     await api.del(`/reminders/${r.id}`);
+    refreshBadges(true);
     writeCache("reminders", list);
   } catch {
     reload(); // restore true state on failure

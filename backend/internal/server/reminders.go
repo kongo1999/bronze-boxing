@@ -24,6 +24,7 @@ func registerReminders(r fiber.Router, store *db.Store) {
 	g := r.Group("/reminders")
 	g.Get("/", h.list)
 	g.Post("/", h.create)
+	g.Get("/counts", h.counts)
 	g.Get("/:id", h.get)
 	g.Put("/:id", h.update)
 	g.Post("/:id/snooze", h.snooze)
@@ -110,6 +111,32 @@ func (h *reminderHandler) list(c *fiber.Ctx) error {
 		out[i] = withDay(out[i])
 	}
 	return c.JSON(out)
+}
+
+// counts powers the in-app badge: open reminders that are overdue or due
+// today, by their effective (snoozed) day in studio time.
+func (h *reminderHandler) counts(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	cur, err := h.store.Coll(models.CollReminders).Find(ctx, bson.M{"done": false})
+	if err != nil {
+		return err
+	}
+	var open []models.Reminder
+	if err := cur.All(ctx, &open); err != nil {
+		return err
+	}
+	today := models.DateKey(time.Now())
+	overdue, dueToday := 0, 0
+	for _, r := range open {
+		switch d := effectiveDay(r); {
+		case d < today:
+			overdue++
+		case d == today:
+			dueToday++
+		}
+	}
+	return c.JSON(fiber.Map{"overdue": overdue, "today": dueToday, "open": len(open)})
 }
 
 func findReminder(ctx context.Context, store *db.Store, id primitive.ObjectID) (models.Reminder, error) {

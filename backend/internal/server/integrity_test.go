@@ -251,10 +251,15 @@ func TestDeletedReferencesAreRejectedOrHandled(t *testing.T) {
 	e.fail("POST", "/sessions", map[string]any{"title": "PT", "type": "private", "start": nowFn().Add(48 * 3600e9), "durationMin": 60,
 		"attendees": []map[string]any{{"trainee": tr.ID}}}, http.StatusBadRequest, CodeTraineeNotFound)
 
-	// A sale of an item that was later removed can still be voided.
+	// An item with sales can't be deleted any more (archive instead)...
 	var s saleOut
 	e.ok("POST", "/inventory/"+it.ID+"/sell", map[string]any{"qty": 1}, &s)
-	e.ok("DELETE", "/inventory/"+it.ID, nil, nil)
+	e.fail("DELETE", "/inventory/"+it.ID, nil, http.StatusConflict, CodeConflict)
+	// ...but one removed before that rule existed leaves sales that must
+	// still void cleanly.
+	if _, err := e.store.Coll(models.CollInventory).DeleteOne(e.ctx, bson.M{"_id": oid(t, it.ID)}); err != nil {
+		t.Fatal(err)
+	}
 	var res struct {
 		Restocked int `json:"restocked"`
 	}

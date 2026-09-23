@@ -100,13 +100,20 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Inventory & sales
 | Method | Path | Notes |
 |---|---|---|
-| GET/POST | `/inventory` | Create opens the item's stock ledger ([item](fixtures/item.json)) |
-| GET/PUT/DELETE | `/inventory/:id` | A PUT that changes `stock` is a correction: needs `reason`, writes a ledger line |
-| POST | `/inventory/:id/sell` | `{qty ≥ 1, trainee?, unitPrice?, priceReason?}` — one transaction: stock, sale (snapshots `unitCost`, `listPrice`), ledger line, audit ([sale](fixtures/sale.json)) |
-| GET | `/inventory/:id/movements` | Stock ledger, newest first ([sample](fixtures/stock-movements.json)) |
-| GET | `/sales?from=&to=&trainee=&item=` | |
-| GET/PUT | `/sales/:id` | A quantity change needs `reason` |
-| POST | `/sales/:id/void` | `{reason}` (required); restocks units still out; `DELETE ?reason=` legacy |
+| GET | `/inventory?active=true\|false&stock=short\|low\|out` | By name. `out` = no stock; `low` = at or under `lowStockThreshold` (when set); `short` = either |
+| POST | `/inventory` | Create opens the item's stock ledger ([item](fixtures/item.json)) |
+| GET/PUT | `/inventory/:id` | PUT edits details; a PUT that changes `stock` is still accepted as a guarded correction (needs `reason`), but the adjustments endpoint is the normal path |
+| DELETE | `/inventory/:id` | Only for an item with no sales and no movement beyond its opening line; otherwise `CONFLICT` (details: sales, movements) — archive instead |
+| POST | `/inventory/:id/archive` \| `/unarchive` | `{reason?}` — archived items can't be sold (`ITEM_INACTIVE`); history kept; audited |
+| POST | `/inventory/:id/adjustments` | `{kind: "restock", qty, unitCost?}` · `{kind: "damage", qty, reason}` · `{kind: "correction", count, expected?, reason}` — one transaction: stock, ledger line, audit. A write-off can't exceed stock (`INSUFFICIENT_STOCK`); a correction whose `expected` no longer matches is `CONFLICT`. Returns `{item, movement}` |
+| POST | `/inventory/:id/sell` | `{qty ≥ 1, trainee?, method?, unitPrice?, priceReason?}` — one transaction: stock, sale (snapshots `unitCost`, `listPrice`), ledger line, audit. A price different from the list price needs `priceReason` ([sale](fixtures/sale.json)) |
+| GET | `/inventory/:id/movements?limit=` | Stock ledger, newest first ([sample](fixtures/stock-movements.json)) |
+| GET | `/sales?from=&to=&trainee=&item=&limit=&offset=` | Newest first; a page with `limit` |
+| GET/PUT | `/sales/:id` | A quantity change needs `reason`; can't go below what was returned |
+| POST | `/sales/:id/returns` | `{qty, amount?, reason, day?}` — partial return: restocks `qty`, records the refund (default qty × unit price) as money out on `day` (not in the future). Capped by units still out and money not yet refunded (`RETURN_EXCEEDS_SALE`); guarded against racing returns; refused on a voided sale. Returns `{return, sale, restocked}` |
+| GET | `/sales/:id/returns` | The sale's returns, oldest first |
+| GET | `/sales/:id/receipt` | `{studioInfo, number: "S-…", sale, returns, net, issued, void, method, cashDay, timezone}` |
+| POST | `/sales/:id/void` | `{reason}` (required); restocks units still out; its returns stop counting too; `DELETE ?reason=` legacy |
 
 ### Sessions, reminders, dashboard, search, audit
 | Method | Path | Notes |
@@ -128,6 +135,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | GET | `/session-plans?trainees=a,b&status=` | Plans for several trainees (booking forms) |
 | GET/PATCH | `/session-plans/:id` | PATCH `{title?, targetCount?, startDate?, endDate?, sessionType?, status?, notes?, reason}` — a reason is required for target, dates or status changes; audited |
 | GET/POST | `/reminders` | `dueDay` (`YYYY-MM-DD`) preferred; `dueDate` accepted. Filters: `status=open\|done`, `priority`, `relatedType`+`relatedId` |
+| GET | `/reminders/counts` | `{overdue, today, open}` by effective (snoozed) studio day — the navigation badge |
 | GET/PUT/DELETE | `/reminders/:id` | Completing a recurring reminder creates the next instance |
 | POST | `/reminders/:id/snooze` | `{days}` or `{until}` |
 | GET | `/dashboard` | Adds `partialCount`, `unpaidCount`, `outstanding` |

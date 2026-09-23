@@ -8,6 +8,9 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** A count shown beside the label (hidden at 0), e.g. overdue reminders. */
+  badge?: number;
+  badgeLabel?: string;
 }
 defineProps<{ items: NavItem[]; showSearch?: boolean }>();
 const emit = defineEmits<{ navigate: [] }>();
@@ -30,6 +33,11 @@ const linkCls = (active: boolean) =>
     >
       <component :is="item.icon" class="h-5 w-5" :stroke-width="isActive(item.to) ? 2.25 : 1.75" />
       {{ item.label }}
+      <span
+        v-if="item.badge"
+        class="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-overdue px-1.5 text-[0.6875rem] font-semibold text-white tnum"
+        :aria-label="item.badgeLabel"
+      >{{ item.badge }}</span>
     </RouterLink>
     <RouterLink
       v-if="showSearch"

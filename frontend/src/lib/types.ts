@@ -255,6 +255,35 @@ export interface StockMovement {
   actor?: string;
 }
 
+export interface SaleReturn {
+  id: string;
+  sale: string;
+  item: string;
+  itemName: string;
+  qty: number;
+  /** Refunded. */
+  amount: number;
+  date: string;
+  reason: string;
+  createdAt: string;
+  actor?: string;
+}
+
+/** GET /sales/:id/receipt */
+export interface SaleReceipt {
+  studioInfo: { name: string; address?: string; phone?: string; currency: string };
+  number: string;
+  sale: Sale;
+  returns: SaleReturn[];
+  /** What the buyer paid once returns are refunded. */
+  net: number;
+  issued: string;
+  void: boolean;
+  method: PayMethod;
+  cashDay: string;
+  timezone: string;
+}
+
 /** One trainee's dues for one month (GET /subscriptions?m=). */
 export interface SubStatus {
   trainee: Trainee;

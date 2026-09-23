@@ -1,8 +1,9 @@
 ﻿<script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import NavLinks from "./NavLinks.vue";
 import { isLoggedIn, logout } from "@/lib/auth";
+import { badges, refreshBadges } from "@/lib/badges";
 import logoUrl from "@/assets/logo.png";
 import {
   House,
@@ -43,6 +44,8 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  badge?: number;
+  badgeLabel?: string;
 }
 
 const tabs: NavItem[] = [
@@ -52,12 +55,26 @@ const tabs: NavItem[] = [
   { to: "/payments", label: "Money", icon: Wallet },
 ];
 
-const railItems: NavItem[] = [
+const railItems = computed<NavItem[]>(() => [
   ...tabs,
-  { to: "/reminders", label: "Reminders", icon: Bell },
+  {
+    to: "/reminders",
+    label: "Reminders",
+    icon: Bell,
+    badge: badges.remindersOverdue,
+    badgeLabel: `${badges.remindersOverdue} overdue`,
+  },
   { to: "/financials", label: "Financials", icon: LineChart },
   { to: "/inventory", label: "Inventory", icon: Package },
-];
+]);
+
+// Keep the overdue count current as the coach moves around (throttled).
+// The shell only renders for someone allowed in, so no auth check here.
+watch(
+  () => route.path,
+  () => refreshBadges(),
+  { immediate: true },
+);
 
 const addActions: NavItem[] = [
   { to: "/schedule/new", label: "New session", icon: CalendarPlus },
@@ -90,11 +107,12 @@ const rightTabs = computed(() => tabs.slice(2));
   >
     <button
       type="button"
-      aria-label="Open menu"
-      class="grid h-10 w-10 place-items-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-fg"
+      :aria-label="badges.remindersOverdue ? `Open menu — ${badges.remindersOverdue} overdue reminders` : 'Open menu'"
+      class="relative grid h-10 w-10 place-items-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-fg"
       @click="menuOpen = true"
     >
       <Menu class="h-6 w-6" />
+      <span v-if="badges.remindersOverdue" class="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-overdue ring-2 ring-surface" aria-hidden="true" />
     </button>
     <RouterLink to="/" class="flex items-center gap-2">
       <img :src="logoUrl" alt="Bronze Boxing Club" class="h-7 w-auto" />

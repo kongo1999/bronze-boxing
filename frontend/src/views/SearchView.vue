@@ -98,7 +98,7 @@ const empty = (r?: SearchResults) =>
         <RouterLink
           v-for="i in results.inventory"
           :key="i.id"
-          to="/inventory"
+          :to="`/inventory/${i.id}`"
           class="flex items-center justify-between rounded-xl border border-line bg-surface px-3 py-2.5 transition-colors hover:border-bronze/30"
         >
           <span class="text-sm font-medium">{{ i.name }}</span>
