@@ -3,13 +3,15 @@ import { ref, reactive, computed } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Undo2 } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync } from "@/lib/cache";
+import { useCachedAsync, clearCache } from "@/lib/cache";
 import type { Sale, Trainee } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import SearchSelect from "@/components/ui/SearchSelect.vue";
+import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
 
@@ -22,7 +24,10 @@ const { data: trainees } = useCachedAsync("/trainees", () => api.get<Trainee[]>(
 // ── Edit (correct qty / buyer) — PUT /sales/:id adjusts stock by the delta ──
 const editing = ref(false);
 const saving = ref(false);
-const form = reactive({ qty: 1, trainee: "" as string | undefined });
+const form = reactive({ qty: 1, trainee: "" });
+
+// Buyer options for the picker; a sale can also be a walk-in (no trainee).
+const traineeOptions = computed(() => (trainees.value ?? []).map((t) => ({ id: t.id, label: t.name })));
 function startEdit() {
   if (!sale.value) return;
   form.qty = sale.value.qty;
@@ -36,6 +41,7 @@ async function save() {
   try {
     await api.put(`/sales/${id}`, { qty: form.qty, trainee: form.trainee || "" });
     editing.value = false;
+    clearCache(); // stock and the sales list on the Inventory page both moved
     await reload();
     toast("Sale updated.", "success");
   } catch (e) {
@@ -54,6 +60,7 @@ async function voidSale() {
   try {
     await api.del(`/sales/${id}`);
     toast("Sale voided and restocked.", "success");
+    clearCache();
     await reload();
   } catch (e) {
     toast(e instanceof Error && e.message ? e.message : "Couldn't void sale.", "error");
@@ -113,19 +120,20 @@ async function voidSale() {
         <div v-else class="mt-4 space-y-3 border-t border-line pt-4">
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-xs text-faint">Quantity</span><input v-model.number="form.qty" type="number" min="1" :class="inputCls" /></label>
-            <label class="block">
+            <div>
               <span class="mb-1 block text-xs text-faint">Buyer</span>
-              <select v-model="form.trainee" :class="inputCls">
-                <option value="">Walk-in</option>
-                <option v-for="t in (trainees ?? [])" :key="t.id" :value="t.id">{{ t.name }}</option>
-              </select>
-            </label>
+              <SearchSelect v-model="form.trainee" :options="traineeOptions" empty-label="Walk-in" placeholder="Walk-in" search-placeholder="Search trainees…" />
+            </div>
           </div>
           <p class="text-xs text-faint">New total <span class="tnum text-fg">{{ money(newTotal) }}</span> · stock adjusts by the quantity change.</p>
           <div class="flex gap-2">
             <Button size="sm" :disabled="saving || form.qty <= 0" @click="save">{{ saving ? "Saving…" : "Save changes" }}</Button>
             <Button size="sm" variant="ghost" @click="editing = false">Cancel</Button>
           </div>
+        </div>
+
+        <div class="mt-4 border-t border-line pt-3">
+          <AuditTrail entity="sale" :id="id" />
         </div>
       </Card>
     </template>

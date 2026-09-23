@@ -1,32 +1,57 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
-import { ChevronLeft, Pencil, Trash2, Phone } from "lucide-vue-next";
+import { ChevronLeft, Pencil, Trash2, Phone, Wallet } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync } from "@/lib/cache";
-import type { Trainee, Payment } from "@/lib/types";
-import { money, formatLongDate } from "@/lib/format";
+import { useCachedAsync, clearCache } from "@/lib/cache";
+import { usePaged } from "@/lib/paginate";
+import type { Trainee, Payment, SubStatus } from "@/lib/types";
+import { money, formatLongDate, monthKey, monthLabel } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Avatar from "@/components/ui/Avatar.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 
 const route = useRoute();
 const router = useRouter();
 const id = route.params.id as string;
+const month = monthKey();
 
 const { data: trainee, loading, error } = useCachedAsync(`/trainees/${id}`, () => api.get<Trainee>(`/trainees/${id}`));
 const { data: payments } = useCachedAsync("payments:all", () => api.get<Payment[]>(`/payments?from=2000-01-01&to=2100-01-01`));
+const { data: subs } = useCachedAsync(`subs:${month}`, () => api.get<SubStatus[]>(`/subscriptions?m=${month}`));
+
+// This month's dues, straight from the same endpoint the Money page uses — so
+// the two screens can never disagree about who owes what.
+const dues = computed(() => (subs.value ?? []).find((s) => s.trainee.id === id));
+const remaining = computed(() => (dues.value ? Math.max(0, dues.value.due - dues.value.amountPaid) : 0));
+const duesTone: Record<string, "paid" | "partial" | "overdue"> = { paid: "paid", partial: "partial", unpaid: "overdue" };
+const duesLabel: Record<string, string> = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" };
+
+// Voided payments stay visible (struck through) — the ledger never hides a
+// record, it marks it.
+const history = computed(() =>
+  (payments.value ?? []).filter((p) => p.trainee === id),
+);
+const { page, pageCount, items, total, from, to } = usePaged(history, 8);
+
+const collectLink = computed(
+  () =>
+    `/payments/new?trainee=${id}&type=subscription&periodMonth=${month}` +
+    (remaining.value > 0 ? `&amount=${remaining.value}` : ""),
+);
 
 const deleting = ref(false);
 async function remove() {
-  if (deleting.value || !confirm("Delete this trainee?")) return;
+  if (deleting.value || !confirm("Delete this trainee? Their payment records stay in the books.")) return;
   deleting.value = true;
   try {
     await api.del(`/trainees/${id}`);
+    clearCache();
     router.push("/trainees");
   } catch (e) {
     deleting.value = false;
@@ -77,24 +102,51 @@ async function remove() {
         </div>
       </Card>
 
+      <!-- Dues: what this month looks like, and the one tap that settles it. -->
+      <Card class="flex items-center justify-between gap-3 p-4">
+        <div class="min-w-0">
+          <p class="label-eyebrow text-[0.6rem] text-faint">Dues · {{ monthLabel(month) }}</p>
+          <p v-if="dues" class="mt-0.5 font-display text-lg tnum">
+            {{ money(dues.amountPaid) }} <span class="text-faint">/ {{ money(dues.due) }}</span>
+          </p>
+          <p v-else class="mt-0.5 text-sm text-muted">
+            {{ trainee.monthlyFee > 0 ? "Not on this month's subscription list." : "No monthly fee set." }}
+          </p>
+          <p v-if="dues && remaining > 0" class="text-xs text-faint">{{ money(remaining) }} still owed</p>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <Badge v-if="dues" :tone="duesTone[dues.state]">{{ duesLabel[dues.state] }}</Badge>
+          <RouterLink
+            v-if="!dues || dues.state !== 'paid'"
+            :to="collectLink"
+            :class="btnClasses('primary', 'sm')"
+          ><Wallet class="h-4 w-4" /> Collect</RouterLink>
+        </div>
+      </Card>
+
       <section class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Payment history</h2>
         <ul class="space-y-2">
           <li
-            v-for="p in (payments ?? []).filter((x) => x.trainee === id)"
+            v-for="p in items"
             :key="p.id"
             class="flex items-center justify-between rounded-xl border border-line bg-surface px-3 py-2.5"
+            :class="p.voidedAt ? 'opacity-60' : ''"
           >
-            <div>
-              <p class="text-sm font-medium capitalize">{{ p.type }}</p>
-              <p class="text-xs text-faint">{{ formatLongDate(p.date) }}</p>
+            <div class="min-w-0">
+              <p class="text-sm font-medium capitalize">
+                {{ p.type }}
+                <span v-if="p.voidedAt" class="ml-1 rounded bg-overdue/15 px-1.5 py-0.5 align-middle text-[0.625rem] font-semibold uppercase tracking-wide text-overdue">Void</span>
+              </p>
+              <p class="text-xs text-faint">
+                {{ formatLongDate(p.date) }}{{ p.periodMonth ? ` · ${monthLabel(p.periodMonth)}` : "" }}
+              </p>
             </div>
-            <span class="font-display text-sm tnum">{{ money(p.amount) }}</span>
+            <span class="font-display text-sm tnum" :class="p.voidedAt ? 'line-through text-faint' : ''">{{ money(p.amount) }}</span>
           </li>
-          <li v-if="(payments ?? []).filter((x) => x.trainee === id).length === 0" class="px-1 text-sm text-faint">
-            No payments recorded yet.
-          </li>
+          <li v-if="total === 0" class="px-1 text-sm text-faint">No payments recorded yet.</li>
         </ul>
+        <Pagination v-model="page" :page-count="pageCount" :total="total" :from="from" :to="to" label="payments" />
       </section>
     </template>
 

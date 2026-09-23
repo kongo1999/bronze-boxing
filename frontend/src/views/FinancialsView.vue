@@ -2,7 +2,8 @@
 import { ref, reactive, computed, watch } from "vue";
 import { Plus, Pencil, Download } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { readCache, writeCache } from "@/lib/cache";
+import { readCache, writeCache, clearCache } from "@/lib/cache";
+import { usePaged } from "@/lib/paginate";
 import type { Financials, Expense } from "@/lib/types";
 import { money, monthKey, monthLabel } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -13,6 +14,9 @@ import { btnClasses } from "@/components/ui/button";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import MonthPicker from "@/components/ui/MonthPicker.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Pagination from "@/components/ui/Pagination.vue";
+import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
 
@@ -62,6 +66,22 @@ watch(month, () => { loading.value = !showCached(); load(); }, { immediate: true
 
 const netPositive = computed(() => (fin.value?.net ?? 0) >= 0);
 
+// Search this month s outgoings by category, note, or amount. catLabel is
+// declared further down; the computed only reads it when it first evaluates,
+// which is after setup has run.
+const q = ref("");
+const filteredExpenses = computed(() => {
+  const term = q.value.trim().toLowerCase();
+  if (!term) return expenses.value;
+  return expenses.value.filter(
+    (e) =>
+      (catLabel[e.category] ?? e.category).toLowerCase().includes(term) ||
+      (e.note ?? "").toLowerCase().includes(term) ||
+      String(e.amount).includes(term),
+  );
+});
+const { page, pageCount, items, total, from, to } = usePaged(filteredExpenses, 10);
+
 async function addExpense() {
   if (busy.value || form.amount <= 0) return;
   busy.value = true;
@@ -83,6 +103,7 @@ async function voidExpense(id: string) {
   if (!confirm("Void this expense? It stays in the books marked VOID and stops counting.")) return;
   try {
     await api.del(`/expenses/${id}`);
+    clearCache();
     load();
     toast("Expense voided.", "success");
   } catch (e) {
@@ -120,6 +141,7 @@ async function saveExpenseEdit(id: string) {
   try {
     await api.put(`/expenses/${id}`, { amount: editForm.amount, category: editForm.category, note: editForm.note });
     editingId.value = null;
+    clearCache();
     await load();
     toast("Expense updated.", "success");
   } catch (e) {
@@ -187,8 +209,10 @@ const catLabel: Record<string, string> = {
           <Button size="sm" :disabled="busy || form.amount <= 0" @click="addExpense">{{ busy ? "Adding…" : "Add expense" }}</Button>
         </Card>
 
+        <SearchInput v-model="q" placeholder="Search outgoings — category, note, amount…" />
+
         <ul class="space-y-2">
-          <li v-for="e in expenses" :key="e.id" class="rounded-xl border border-line bg-surface" :class="e.voidedAt ? 'opacity-60' : ''">
+          <li v-for="e in items" :key="e.id" class="rounded-xl border border-line bg-surface" :class="e.voidedAt ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3 px-3 py-2.5">
               <div class="min-w-0">
                 <p class="text-sm font-medium">
@@ -218,9 +242,15 @@ const catLabel: Record<string, string> = {
                 <Button size="sm" variant="ghost" @click="editingId = null">Cancel</Button>
               </div>
             </div>
+            <div class="border-t border-line px-3 py-2">
+              <AuditTrail entity="expense" :id="e.id" />
+            </div>
           </li>
-          <li v-if="expenses.length === 0" class="px-1 text-sm text-faint">No expenses logged this month.</li>
+          <li v-if="filteredExpenses.length === 0" class="px-1 text-sm text-faint">
+            {{ q ? "No outgoings match that." : "No expenses logged this month." }}
+          </li>
         </ul>
+        <Pagination v-model="page" :page-count="pageCount" :total="total" :from="from" :to="to" label="expenses" />
       </section>
     </template>
   </div>

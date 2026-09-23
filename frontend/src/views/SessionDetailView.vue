@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
-import { ChevronLeft, Trash2, MapPin, Clock } from "lucide-vue-next";
+import { ChevronLeft, Trash2, MapPin, Clock, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync } from "@/lib/cache";
+import { useCachedAsync, clearCache } from "@/lib/cache";
 import type { Session, Attendee } from "@/lib/types";
 import { formatTime } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
@@ -35,10 +35,11 @@ async function setAttendance(a: Attendee, status: string) {
 }
 const deleting = ref(false);
 async function remove() {
-  if (deleting.value || !confirm("Delete this session?")) return;
+  if (deleting.value || !confirm("Delete this session? Cancel it instead if you want to keep the record.")) return;
   deleting.value = true;
   try {
     await api.del(`/sessions/${id}`);
+    clearCache(); // the week list still holds this session
     router.push("/schedule");
   } catch (e) {
     deleting.value = false;
@@ -59,17 +60,26 @@ async function remove() {
     <template v-else-if="session">
       <Card class="p-4">
         <div class="flex items-start justify-between gap-2">
-          <div>
-            <h1 class="font-display text-xl font-semibold">{{ session.title }}</h1>
+          <div class="min-w-0">
+            <h1 class="font-display text-xl font-semibold" :class="session.status === 'cancelled' ? 'line-through opacity-70' : ''">
+              {{ session.title }}
+            </h1>
             <p class="text-sm text-muted">{{ dateLabel(session.start) }}</p>
           </div>
-          <Badge :tone="session.type === 'group' ? 'bronze' : 'info'">{{ session.type === "group" ? "Group" : "Private" }}</Badge>
+          <div class="flex shrink-0 flex-col items-end gap-1.5">
+            <Badge :tone="session.type === 'group' ? 'bronze' : 'info'">{{ session.type === "group" ? "Group" : "Private" }}</Badge>
+            <Badge v-if="session.status === 'cancelled'" tone="overdue">Cancelled</Badge>
+            <Badge v-else-if="session.status === 'completed'" tone="paid">Done</Badge>
+          </div>
         </div>
         <div class="mt-3 flex flex-wrap gap-3 text-sm text-muted">
           <span class="inline-flex items-center gap-1"><Clock class="h-4 w-4" /> {{ formatTime(session.start) }} · {{ session.durationMin }}min</span>
           <span v-if="session.location" class="inline-flex items-center gap-1"><MapPin class="h-4 w-4" /> {{ session.location }}</span>
         </div>
-        <button :class="[btnClasses('danger', 'sm'), 'mt-4']" :disabled="deleting" @click="remove"><Trash2 class="h-4 w-4" /> {{ deleting ? "Deleting…" : "Delete" }}</button>
+        <div class="mt-4 flex gap-2">
+          <RouterLink :to="`/schedule/${id}/edit`" :class="btnClasses('ghost', 'sm')"><Pencil class="h-4 w-4" /> Edit</RouterLink>
+          <button :class="btnClasses('danger', 'sm')" :disabled="deleting" @click="remove"><Trash2 class="h-4 w-4" /> {{ deleting ? "Deleting…" : "Delete" }}</button>
+        </div>
       </Card>
 
       <section class="space-y-2">
@@ -94,7 +104,9 @@ async function remove() {
               </button>
             </div>
           </li>
-          <li v-if="session.attendees.length === 0" class="px-1 text-sm text-faint">No one booked.</li>
+          <li v-if="session.attendees.length === 0" class="px-1 text-sm text-faint">
+            No one booked — <RouterLink :to="`/schedule/${id}/edit`" class="font-medium text-bronze hover:underline">add trainees</RouterLink>.
+          </li>
         </ul>
       </section>
     </template>

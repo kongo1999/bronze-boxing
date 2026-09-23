@@ -139,3 +139,16 @@ export interface SearchResults {
   payments: Payment[];
   inventory: InventoryItem[];
 }
+
+// One line of the append-only money trail (GET /audit/:entity/:id). `before`
+// and `after` are whole-record snapshots as plain objects, so the UI diffs
+// whichever fields it cares to show.
+export interface AuditEntry {
+  id: string;
+  entity: "payment" | "expense" | "sale";
+  ref: string;
+  action: "update" | "void";
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  at: string;
+}

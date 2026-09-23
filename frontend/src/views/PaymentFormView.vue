@@ -8,6 +8,7 @@ import { money, monthLabel } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
+import SearchSelect from "@/components/ui/SearchSelect.vue";
 import { inputCls } from "@/lib/ui";
 
 const route = useRoute();
@@ -27,6 +28,11 @@ const form = reactive({
 onMounted(async () => {
   trainees.value = await api.get<Trainee[]>("/trainees");
 });
+
+// Searchable picker instead of a long native dropdown — the roster only grows.
+const traineeOptions = computed(() =>
+  trainees.value.map((t) => ({ id: t.id, label: t.name, sub: t.status === "inactive" ? "inactive" : undefined })),
+);
 
 // Dues context for subscription payments: what's owed, paid, and remaining
 // for the chosen trainee + period. Shown inline and used to block overpaying
@@ -80,13 +86,10 @@ async function submit() {
 
     <Card class="space-y-3 p-4">
       <Alert v-if="error">{{ error }}</Alert>
-      <label class="block">
+      <div>
         <span class="mb-1 block text-xs text-faint">Trainee</span>
-        <select v-model="form.trainee" :class="inputCls">
-          <option value="">— (none)</option>
-          <option v-for="t in trainees" :key="t.id" :value="t.id">{{ t.name }}</option>
-        </select>
-      </label>
+        <SearchSelect v-model="form.trainee" :options="traineeOptions" empty-label="— (none)" placeholder="— (none)" search-placeholder="Search trainees…" />
+      </div>
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
           <span class="mb-1 block text-xs text-faint">Amount</span>
@@ -103,8 +106,8 @@ async function submit() {
         </label>
       </div>
       <label v-if="form.type === 'subscription'" class="block">
-        <span class="mb-1 block text-xs text-faint">Period month (YYYY-MM)</span>
-        <input v-model="form.periodMonth" :class="inputCls" placeholder="2026-05" />
+        <span class="mb-1 block text-xs text-faint">Period month</span>
+        <input v-model="form.periodMonth" type="month" :class="inputCls" />
       </label>
       <p v-if="dueInfo" class="text-xs" :class="overpaying ? 'text-overdue' : 'text-faint'">
         {{ monthLabel(form.periodMonth) }}: {{ money(dueInfo.due) }} fee · {{ money(dueInfo.paid) }} paid ·

@@ -10,6 +10,7 @@ import { formatTime, dateKey } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import Badge from "@/components/ui/Badge.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
 import { btnClasses } from "@/components/ui/button";
 
 const cursor = ref(new Date()); // any date within the visible week
@@ -57,6 +58,20 @@ function showCached() {
 }
 watch(weekStart, () => { showCached(); load(); }, { immediate: true });
 
+// Search narrows the visible week by class title, location, or who's booked —
+// "who is Rami in this week?" without leaving the schedule.
+const q = ref("");
+const matching = computed(() => {
+  const term = q.value.trim().toLowerCase();
+  if (!term) return sessions.value;
+  return sessions.value.filter(
+    (s) =>
+      s.title.toLowerCase().includes(term) ||
+      (s.location ?? "").toLowerCase().includes(term) ||
+      s.attendees.some((a) => (a.traineeName ?? "").toLowerCase().includes(term)),
+  );
+});
+
 // Group the visible week's sessions by day (Monday first); skip empty days so
 // the list reads like a to-do list, not a mostly-blank grid.
 const days = computed(() => {
@@ -64,7 +79,7 @@ const days = computed(() => {
   const out: { key: string; label: string; isToday: boolean; sessions: Session[] }[] = [];
   for (let i = 0; i < 7; i++) {
     const date = new Date(weekStart.value.getFullYear(), weekStart.value.getMonth(), weekStart.value.getDate() + i);
-    const daySessions = sessions.value
+    const daySessions = matching.value
       .filter((s) => sameDay(new Date(s.start), date))
       .sort((a, b) => +new Date(a.start) - +new Date(b.start));
     if (daySessions.length === 0) continue;
@@ -121,7 +136,14 @@ async function toggleDone(s: Session) {
       <button :class="btnClasses('ghost', 'sm')" @click="goToday"><CalendarDays class="h-4 w-4" /> Jump to this week</button>
     </div>
 
-    <EmptyState v-if="isEmpty" :icon="CalendarDays" title="No classes this week" description="Add a session to fill the week." />
+    <SearchInput v-model="q" placeholder="Search this week — class, trainee, place…" />
+
+    <EmptyState
+      v-if="isEmpty"
+      :icon="CalendarDays"
+      :title="q ? 'No matches this week' : 'No classes this week'"
+      :description="q ? 'Try another word, or step to a different week.' : 'Add a session to fill the week.'"
+    />
 
     <section v-for="day in days" :key="day.key" class="space-y-2">
       <h2 class="flex items-center gap-2 px-1 font-display text-sm font-semibold tracking-tight text-fg">

@@ -31,6 +31,54 @@ func writeAudit(ctx context.Context, store *db.Store, entity string, ref primiti
 	}
 }
 
+// jsonable turns the driver's generic BSON values into shapes that marshal to
+// ordinary JSON. Before/After are stored as `any`, so Mongo hands them back as
+// primitive.D — which encoding/json would render as [{"Key":…,"Value":…}],
+// useless to the UI. Documents become objects, ObjectIDs and dates become
+// strings, and everything nested is converted the same way.
+func jsonable(v any) any {
+	switch t := v.(type) {
+	case primitive.D:
+		m := make(map[string]any, len(t))
+		for _, e := range t {
+			m[e.Key] = jsonable(e.Value)
+		}
+		return m
+	case primitive.M:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			m[k] = jsonable(val)
+		}
+		return m
+	case primitive.A:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = jsonable(e)
+		}
+		return out
+	case primitive.ObjectID:
+		return t.Hex()
+	case primitive.DateTime:
+		return t.Time().UTC()
+	case primitive.Null:
+		return nil
+	default:
+		return v
+	}
+}
+
+// auditOut is one trail line as the UI sees it: before/after flattened to
+// plain JSON objects.
+type auditOut struct {
+	ID     string    `json:"id"`
+	Entity string    `json:"entity"`
+	Ref    string    `json:"ref"`
+	Action string    `json:"action"`
+	Before any       `json:"before,omitempty"`
+	After  any       `json:"after,omitempty"`
+	At     time.Time `json:"at"`
+}
+
 // registerAudit exposes the trail read-only: GET /api/audit/:entity/:id lists
 // every recorded change for one payment, expense, or sale, newest first.
 func registerAudit(r fiber.Router, store *db.Store) {
@@ -53,9 +101,21 @@ func registerAudit(r fiber.Router, store *db.Store) {
 		if err != nil {
 			return err
 		}
-		out := []models.AuditEntry{}
-		if err := cur.All(ctx, &out); err != nil {
+		entries := []models.AuditEntry{}
+		if err := cur.All(ctx, &entries); err != nil {
 			return err
+		}
+		out := make([]auditOut, len(entries))
+		for i, e := range entries {
+			out[i] = auditOut{
+				ID:     e.ID.Hex(),
+				Entity: e.Entity,
+				Ref:    e.Ref.Hex(),
+				Action: e.Action,
+				Before: jsonable(e.Before),
+				After:  jsonable(e.After),
+				At:     e.At,
+			}
 		}
 		return c.JSON(out)
 	})

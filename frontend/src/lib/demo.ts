@@ -8,7 +8,7 @@
 
 import type {
   Trainee, Session, Payment, Reminder, Expense, InventoryItem, Sale,
-  SubStatus, Dashboard, Financials, SearchResults, Attendee,
+  SubStatus, Dashboard, Financials, SearchResults, Attendee, AuditEntry,
 } from "./types";
 
 // Demo on in production unless explicitly disabled; off in dev unless forced.
@@ -128,6 +128,20 @@ const sales: Sale[] = [
   { id: "sa3", item: "i3", itemName: "Water Bottle 750ml", qty: 3, unitPrice: 5, total: 15, date: iso(-4, 19), createdAt: nowISO },
 ];
 
+// ── Audit trail ───────────────────────────────────────────────────────────────
+// The demo records real history for what you actually do in-session, so the
+// History panel shows the same thing it would against the live API — rather
+// than fabricated entries that were never true.
+const audit: AuditEntry[] = [];
+function logAudit(entity: AuditEntry["entity"], ref: string, action: AuditEntry["action"], before: unknown, after: unknown): void {
+  audit.unshift({
+    id: genId(), entity, ref, action,
+    before: { ...(before as Record<string, unknown>) },
+    after: { ...(after as Record<string, unknown>) },
+    at: new Date().toISOString(),
+  });
+}
+
 // ── Computed (mirror the Go backend) ─────────────────────────────────────────
 // Voided records stay in lists but never count toward money totals.
 const live = <T extends { voidedAt?: string }>(arr: T[]) => arr.filter((x) => !x.voidedAt);
@@ -194,6 +208,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     return r(["Date,Kind,Detail,Type,Note,In,Out,Status", ...rows.sort(), "", `,,,,Total income,${f.income.toFixed(2)},,`, `,,,,Total outgoings,,${f.outgoings.toFixed(2)},`, `,,,,Net,${f.net.toFixed(2)},,`].join("\n"));
   }
   if (path === "/subscriptions") return r(subscriptions());
+  if (seg[0] === "audit" && seg.length === 3) {
+    return r(audit.filter((a) => a.entity === seg[1] && a.ref === seg[2]));
+  }
 
   if (path === "/search") {
     const q = (params.get("q") ?? "").toLowerCase();
@@ -252,8 +269,8 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     }
     const id = seg[1];
     if (seg[2] === "receipt") return r({ studio: "Bronze Boxing", payment: payments.find((p) => p.id === id), issued: nowISO });
-    if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; } return r(p); }
-    if (method === "DELETE") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) p.voidedAt = nowISO; return r({ ok: true, voided: true }); }
+    if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; logAudit("payment", id, "update", before, p); } return r(p); }
+    if (method === "DELETE") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; p.voidedAt = nowISO; logAudit("payment", id, "void", before, p); } return r({ ok: true, voided: true }); }
   }
 
   // /reminders
@@ -274,8 +291,8 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       return r(expenses);
     }
     const id = seg[1];
-    if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) Object.assign(e, body); return r(e); }
-    if (method === "DELETE") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) e.voidedAt = nowISO; return r({ ok: true, voided: true }); }
+    if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) { const before = { ...e }; Object.assign(e, body); logAudit("expense", id, "update", before, e); } return r(e); }
+    if (method === "DELETE") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) { const before = { ...e }; e.voidedAt = nowISO; logAudit("expense", id, "void", before, e); } return r({ ok: true, voided: true }); }
   }
 
   // /inventory + /sales
@@ -304,12 +321,13 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     const id = seg[1];
     if (method === "DELETE") {
       const sale = sales.find((x) => x.id === id);
-      if (sale && !sale.voidedAt) { const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; sale.voidedAt = nowISO; }
+      if (sale && !sale.voidedAt) { const before = { ...sale }; const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; sale.voidedAt = nowISO; logAudit("sale", id, "void", before, sale); }
       return r({ ok: true, voided: true, restocked: sale?.qty ?? 0 });
     }
     if (method === "PUT") {
       const sale = sales.find((x) => x.id === id);
       if (sale && !sale.voidedAt) {
+        const before = { ...sale };
         if (typeof body.qty === "number") {
           const it = inventory.find((x) => x.id === sale.item);
           if (it) it.stock = Math.max(0, it.stock - (body.qty - sale.qty));
@@ -317,6 +335,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
           sale.total = sale.unitPrice * body.qty;
         }
         if (body.trainee !== undefined) { sale.trainee = body.trainee || undefined; sale.traineeName = body.trainee ? tName(body.trainee) : undefined; }
+        logAudit("sale", id, "update", before, sale);
       }
       return r(sale);
     }

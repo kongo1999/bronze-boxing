@@ -1,18 +1,30 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
-import { Plus, Bell, Check, Trash2 } from "lucide-vue-next";
+import { Plus, Bell, Check, Trash2, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
+import { usePaged } from "@/lib/paginate";
 import type { Reminder } from "@/lib/types";
 import { formatLongDate } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 
 const { data, loading, error, reload } = useCachedAsync("/reminders", () => api.get<Reminder[]>("/reminders"));
+
+const q = ref("");
+const filtered = computed(() => {
+  const list = data.value ?? [];
+  const term = q.value.trim().toLowerCase();
+  return term ? list.filter((r) => r.title.toLowerCase().includes(term)) : list;
+});
+const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
 
 // Optimistic: flip the UI immediately, fire one request, revert only on failure.
 // No full-list refetch — that caused request pile-up and out-of-order overwrites.
@@ -29,6 +41,7 @@ async function toggle(r: Reminder) {
 async function remove(r: Reminder) {
   const list = data.value;
   if (!list) return;
+  if (!confirm(`Delete "${r.title}"?`)) return;
   const idx = list.indexOf(r);
   if (idx >= 0) list.splice(idx, 1); // optimistic removal
   try {
@@ -49,33 +62,51 @@ const dotColor = (p: string) => (p === "high" ? "bg-overdue" : p === "normal" ? 
       </template>
     </PageHeader>
 
+    <SearchInput v-model="q" placeholder="Search reminders…" />
+
     <Skeleton v-if="loading" :rows="4" />
     <Alert v-else-if="error">
       {{ error }}
       <button class="ml-1 font-medium underline" @click="reload">Retry</button>
     </Alert>
-    <EmptyState v-else-if="(data ?? []).length === 0" :icon="Bell" title="No reminders" description="Add things you need to remember this week." />
-    <ul v-else class="space-y-2">
-      <li
-        v-for="r in data"
-        :key="r.id"
-        class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5"
-        :class="r.done ? 'opacity-50' : ''"
-      >
-        <button
-          class="grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors"
-          :class="r.done ? 'border-paid bg-paid/20 text-paid' : 'border-line text-transparent hover:border-bronze'"
-          @click="toggle(r)"
+    <EmptyState
+      v-else-if="filtered.length === 0"
+      :icon="Bell"
+      :title="q ? 'No matches' : 'No reminders'"
+      :description="q ? 'Try a different word.' : 'Add things you need to remember this week.'"
+    />
+    <template v-else>
+      <ul class="space-y-2">
+        <li
+          v-for="r in items"
+          :key="r.id"
+          class="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5"
+          :class="r.done ? 'opacity-50' : ''"
         >
-          <Check class="h-3.5 w-3.5" />
-        </button>
-        <span class="h-2 w-2 shrink-0 rounded-full" :class="dotColor(r.priority)" />
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-sm" :class="r.done ? 'line-through' : ''">{{ r.title }}</p>
-          <p class="text-xs text-faint">{{ formatLongDate(r.dueDate) }}</p>
-        </div>
-        <button class="text-faint hover:text-overdue" aria-label="Delete" @click="remove(r)"><Trash2 class="h-4 w-4" /></button>
-      </li>
-    </ul>
+          <button
+            class="grid h-6 w-6 shrink-0 place-items-center rounded-full border transition-colors"
+            :class="r.done ? 'border-paid bg-paid/20 text-paid' : 'border-line text-transparent hover:border-bronze'"
+            :aria-label="r.done ? 'Mark not done' : 'Mark done'"
+            @click="toggle(r)"
+          >
+            <Check class="h-3.5 w-3.5" />
+          </button>
+          <span class="h-2 w-2 shrink-0 rounded-full" :class="dotColor(r.priority)" />
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm" :class="r.done ? 'line-through' : ''">{{ r.title }}</p>
+            <p class="text-xs text-faint">{{ formatLongDate(r.dueDate) }}</p>
+          </div>
+          <RouterLink
+            :to="`/reminders/${r.id}/edit`"
+            class="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10"
+            aria-label="Edit reminder"
+          >
+            <Pencil class="h-4 w-4" />
+          </RouterLink>
+          <button class="shrink-0 text-faint hover:text-overdue" aria-label="Delete reminder" @click="remove(r)"><Trash2 class="h-4 w-4" /></button>
+        </li>
+      </ul>
+      <Pagination v-model="page" :page-count="pageCount" :total="total" :from="from" :to="to" label="reminders" />
+    </template>
   </div>
 </template>

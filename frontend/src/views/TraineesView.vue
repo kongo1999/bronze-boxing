@@ -4,6 +4,7 @@ import { RouterLink } from "vue-router";
 import { ChevronRight, UserPlus, Users } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
+import { usePaged } from "@/lib/paginate";
 import type { Trainee } from "@/lib/types";
 import { money } from "@/lib/format";
 import PageHeader from "@/components/ui/PageHeader.vue";
@@ -13,8 +14,9 @@ import Badge from "@/components/ui/Badge.vue";
 import Button from "@/components/ui/Button.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
-import { inputCls } from "@/lib/ui";
 
 const q = ref("");
 const { data, loading, error, reload } = useCachedAsync("/trainees", () => api.get<Trainee[]>(`/trainees`));
@@ -25,6 +27,7 @@ const filtered = computed(() => {
   return term ? list.filter((t) => t.name.toLowerCase().includes(term)) : list;
 });
 const activeCount = computed(() => filtered.value.filter((t) => t.status === "active").length);
+const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
 </script>
 
 <template>
@@ -37,7 +40,7 @@ const activeCount = computed(() => filtered.value.filter((t) => t.status === "ac
       </template>
     </PageHeader>
 
-    <input v-model="q" type="search" placeholder="Search by name…" :class="inputCls" />
+    <SearchInput v-model="q" placeholder="Search by name…" />
 
     <Skeleton v-if="loading" :rows="5" />
 
@@ -60,7 +63,7 @@ const activeCount = computed(() => filtered.value.filter((t) => t.status === "ac
         {{ activeCount }} active{{ filtered.length !== activeCount ? ` · ${filtered.length - activeCount} inactive` : "" }}
       </p>
       <ul class="space-y-2">
-        <li v-for="t in filtered" :key="t.id">
+        <li v-for="t in items" :key="t.id">
           <RouterLink
             :to="`/trainees/${t.id}`"
             class="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3 transition-colors hover:border-bronze/30"
@@ -80,6 +83,7 @@ const activeCount = computed(() => filtered.value.filter((t) => t.status === "ac
           </RouterLink>
         </li>
       </ul>
+      <Pagination v-model="page" :page-count="pageCount" :total="total" :from="from" :to="to" label="trainees" />
     </template>
   </div>
 </template>

@@ -1,21 +1,33 @@
 <script setup lang="ts">
 import { reactive, ref, computed, onMounted } from "vue";
-import { useRouter, RouterLink } from "vue-router";
+import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Users, User, Search, Check } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import type { Trainee } from "@/lib/types";
+import { clearCache } from "@/lib/cache";
+import type { Session, Trainee, AttendanceStatus, SessionStatus } from "@/lib/types";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
+import Skeleton from "@/components/ui/Skeleton.vue";
 import ToggleSwitch from "@/components/ui/ToggleSwitch.vue";
 import DateWheel from "@/components/ui/DateWheel.vue";
 import TimeWheel from "@/components/ui/TimeWheel.vue";
 import { inputCls } from "@/lib/ui";
 import { dateKey } from "@/lib/format";
+import { toast } from "@/lib/toast";
 
+const route = useRoute();
 const router = useRouter();
+
+// One form, two jobs: /schedule/new creates, /schedule/:id/edit updates.
+// Editing is single-occurrence — a recurring run is generated up front, so the
+// repeat controls only make sense while creating.
+const editId = (route.params.id as string | undefined) ?? "";
+const isEdit = !!editId;
+
 const trainees = ref<Trainee[]>([]);
 const saving = ref(false);
+const loading = ref(isEdit);
 const error = ref<string>();
 const recurring = ref(false);
 const search = ref("");
@@ -26,14 +38,49 @@ const form = reactive({
   date: "",
   time: "18:00",
   durationMin: 60,
+  location: "",
+  status: "scheduled" as SessionStatus,
   attendees: [] as string[],
   // recurring
   weekdays: [] as number[],
   endDate: "",
 });
 
+// Attendance already marked on this session, kept so re-saving the roster
+// doesn't quietly reset everyone marked attended/no-show back to "booked"
+// (the update endpoint replaces the whole attendee array).
+const priorStatus = new Map<string, AttendanceStatus>();
+
 onMounted(async () => {
-  trainees.value = (await api.get<Trainee[]>("/trainees")).filter((t) => t.status === "active");
+  try {
+    const [all, existing] = await Promise.all([
+      api.get<Trainee[]>("/trainees"),
+      isEdit ? api.get<Session>(`/sessions/${editId}`) : Promise.resolve(undefined),
+    ]);
+    // An inactive trainee already on this session stays pickable, so editing
+    // doesn't silently drop them from the roster.
+    const keep = new Set(existing?.attendees.map((a) => a.trainee) ?? []);
+    trainees.value = all.filter((t) => t.status === "active" || keep.has(t.id));
+
+    if (existing) {
+      const start = new Date(existing.start);
+      Object.assign(form, {
+        title: existing.title,
+        type: existing.type,
+        date: dateKey(start),
+        time: `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`,
+        durationMin: existing.durationMin,
+        location: existing.location ?? "",
+        status: existing.status,
+        attendees: existing.attendees.map((a) => a.trainee),
+      });
+      for (const a of existing.attendees) priorStatus.set(a.trainee, a.status);
+    }
+  } catch (e) {
+    error.value = e instanceof Error && e.message ? e.message : "Couldn't load this session.";
+  } finally {
+    loading.value = false;
+  }
 });
 
 // Placeholder speaks the chosen type — no stray "group" wording on a private.
@@ -47,6 +94,11 @@ const dows = [
 ];
 const durationPresets = [45, 60, 90];
 const weekPresets = [2, 4, 8, 12];
+const statuses: { v: SessionStatus; l: string }[] = [
+  { v: "scheduled", l: "Scheduled" },
+  { v: "completed", l: "Done" },
+  { v: "cancelled", l: "Cancelled" },
+];
 
 // Shared pill styling so weekdays, durations and week presets read as one family.
 function pill(active: boolean) {
@@ -104,19 +156,40 @@ const recurringCount = computed(() => {
   return n;
 });
 
-const createLabel = computed(() => {
+const submitLabel = computed(() => {
   if (saving.value) return "Saving…";
+  if (isEdit) return "Save changes";
   if (recurring.value) return `Create ${recurringCount.value} session${recurringCount.value === 1 ? "" : "s"}`;
   return "Create session";
 });
+
+// Keep each attendee's recorded attendance; anyone newly ticked starts booked.
+const attendeePayload = () =>
+  form.attendees.map((id) => ({ trainee: id, status: priorStatus.get(id) ?? "booked" }));
 
 async function submit() {
   if (!form.title.trim()) return (error.value = "Title is required");
   if (!form.date) return (error.value = "Date is required");
   saving.value = true;
   error.value = undefined;
-  const attendees = form.attendees.map((id) => ({ trainee: id, status: "booked" }));
   try {
+    if (isEdit) {
+      await api.put(`/sessions/${editId}`, {
+        title: form.title,
+        type: form.type,
+        start: new Date(`${form.date}T${form.time}`).toISOString(),
+        durationMin: form.durationMin,
+        location: form.location,
+        status: form.status,
+        attendees: attendeePayload(),
+      });
+      // The week list and this session's detail are both cached — drop them so
+      // the change is on screen the moment we land back.
+      clearCache();
+      toast("Session updated.", "success");
+      router.push(`/schedule/${editId}`);
+      return;
+    }
     if (recurring.value) {
       if (form.weekdays.length === 0) {
         saving.value = false;
@@ -124,17 +197,18 @@ async function submit() {
       }
       await api.post("/sessions/recurring", {
         title: form.title, type: form.type, weekdays: form.weekdays, time: form.time,
-        durationMin: form.durationMin,
+        durationMin: form.durationMin, location: form.location,
         from: new Date(form.date).toISOString(),
-        to: new Date(form.endDate || form.date).toISOString(), attendees,
+        to: new Date(form.endDate || form.date).toISOString(), attendees: attendeePayload(),
       });
     } else {
       const start = new Date(`${form.date}T${form.time}`);
       await api.post("/sessions", {
         title: form.title, type: form.type, start: start.toISOString(),
-        durationMin: form.durationMin, attendees,
+        durationMin: form.durationMin, location: form.location, attendees: attendeePayload(),
       });
     }
+    clearCache();
     router.push("/schedule");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to save";
@@ -145,12 +219,14 @@ async function submit() {
 
 <template>
   <div class="space-y-4">
-    <RouterLink to="/schedule" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
-      <ChevronLeft class="h-4 w-4" /> Schedule
+    <RouterLink :to="isEdit ? `/schedule/${editId}` : '/schedule'" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+      <ChevronLeft class="h-4 w-4" /> {{ isEdit ? "Session" : "Schedule" }}
     </RouterLink>
-    <h1 class="font-display text-2xl font-semibold">New session</h1>
+    <h1 class="font-display text-2xl font-semibold">{{ isEdit ? "Edit session" : "New session" }}</h1>
 
-    <Card class="space-y-4 p-4">
+    <Skeleton v-if="loading" variant="detail" />
+
+    <Card v-else class="space-y-4 p-4">
       <Alert v-if="error">{{ error }}</Alert>
 
       <label class="block">
@@ -196,8 +272,31 @@ async function submit() {
         </div>
       </div>
 
-      <!-- Repeat weekly: iOS switch + reveal -->
-      <div class="rounded-xl border border-line bg-elevated/40 p-3">
+      <label class="block">
+        <span class="mb-1 block text-xs text-faint">Location <span class="text-faint/70">(optional)</span></span>
+        <input v-model="form.location" :class="inputCls" placeholder="Main floor" />
+      </label>
+
+      <!-- Status: only meaningful once the session exists. -->
+      <div v-if="isEdit">
+        <span class="mb-1 block text-xs text-faint">Status</span>
+        <div class="grid grid-cols-3 gap-1 rounded-xl border border-line bg-elevated p-1">
+          <button
+            v-for="s in statuses"
+            :key="s.v"
+            type="button"
+            class="rounded-lg py-2 text-sm font-medium transition-colors"
+            :class="form.status === s.v ? 'bg-bronze text-bronze-ink' : 'text-muted hover:text-fg'"
+            @click="form.status = s.v"
+          >{{ s.l }}</button>
+        </div>
+        <p v-if="form.status === 'cancelled'" class="mt-1.5 text-xs text-faint">
+          A cancelled session stays on the schedule, greyed out, and stops blocking the slot.
+        </p>
+      </div>
+
+      <!-- Repeat weekly: iOS switch + reveal (creating only) -->
+      <div v-if="!isEdit" class="rounded-xl border border-line bg-elevated/40 p-3">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm font-medium">Repeat weekly</p>
@@ -257,7 +356,7 @@ async function submit() {
         </div>
       </div>
 
-      <Button :disabled="saving || (recurring && recurringCount === 0)" @click="submit">{{ createLabel }}</Button>
+      <Button :disabled="saving || (!isEdit && recurring && recurringCount === 0)" @click="submit">{{ submitLabel }}</Button>
     </Card>
   </div>
 </template>

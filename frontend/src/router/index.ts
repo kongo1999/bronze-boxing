@@ -14,12 +14,14 @@ const routes = [
   { path: "/schedule", name: "schedule", component: () => import("@/views/ScheduleView.vue") },
   { path: "/schedule/new", name: "session-new", component: () => import("@/views/SessionFormView.vue") },
   { path: "/schedule/:id", name: "session-detail", component: () => import("@/views/SessionDetailView.vue") },
+  { path: "/schedule/:id/edit", name: "session-edit", component: () => import("@/views/SessionFormView.vue") },
 
   { path: "/payments", name: "payments", component: () => import("@/views/PaymentsView.vue") },
   { path: "/payments/new", name: "payment-new", component: () => import("@/views/PaymentFormView.vue") },
 
   { path: "/reminders", name: "reminders", component: () => import("@/views/RemindersView.vue") },
   { path: "/reminders/new", name: "reminder-new", component: () => import("@/views/ReminderFormView.vue") },
+  { path: "/reminders/:id/edit", name: "reminder-edit", component: () => import("@/views/ReminderFormView.vue") },
 
   { path: "/financials", name: "financials", component: () => import("@/views/FinancialsView.vue") },
   { path: "/inventory", name: "inventory", component: () => import("@/views/InventoryView.vue") },
