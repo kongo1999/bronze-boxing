@@ -2,13 +2,17 @@ package server
 
 import (
 	"context"
+	"errors"
 	"math"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"bronzeboxing/internal/db"
 	"bronzeboxing/internal/models"
@@ -21,30 +25,59 @@ func reqCtx() (context.Context, context.CancelFunc) {
 
 // objID parses the :id route param as a Mongo ObjectID.
 func objID(c *fiber.Ctx) (primitive.ObjectID, error) {
-	id, err := primitive.ObjectIDFromHex(c.Params("id"))
+	return parseOID(c.Params("id"), "id")
+}
+
+func parseOID(hex, field string) (primitive.ObjectID, error) {
+	id, err := primitive.ObjectIDFromHex(hex)
 	if err != nil {
-		return primitive.NilObjectID, fiber.NewError(fiber.StatusBadRequest, "invalid id")
+		return primitive.NilObjectID, &APIError{Status: http.StatusBadRequest, Code: CodeInvalidID, Message: "invalid " + field, Field: field}
 	}
 	return id, nil
 }
 
-// parseRange reads ?from=&to= (RFC3339 or YYYY-MM-DD); defaults to an open range.
-func parseRange(c *fiber.Ctx) (time.Time, time.Time) {
-	from := parseTime(c.Query("from"), time.Now().AddDate(-100, 0, 0))
-	to := parseTime(c.Query("to"), time.Now().AddDate(100, 0, 0))
-	return from, to
+// parseRange reads ?from=&to= as a half-open [from, to) window. Each bound is
+// RFC3339 (an exact instant) or YYYY-MM-DD (the start of that studio-local
+// day, so to=2026-09-28 excludes the 28th). Missing bounds are open. A
+// malformed bound is rejected rather than silently widened.
+func parseRange(c *fiber.Ctx) (time.Time, time.Time, error) {
+	from, err := parseBound(c.Query("from"), time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), "from")
+	if err != nil {
+		return from, from, err
+	}
+	to, err := parseBound(c.Query("to"), time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC), "to")
+	if err != nil {
+		return from, to, err
+	}
+	if to.Before(from) {
+		return from, to, badField("to", "to must not be before from")
+	}
+	return from, to, nil
 }
 
-func parseTime(s string, def time.Time) time.Time {
+func parseBound(s string, def time.Time, field string) (time.Time, error) {
 	if s == "" {
-		return def
+		return def, nil
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := models.ParseDay(s); err == nil {
+		return t, nil
+	}
+	return def, badField(field, field+" must be YYYY-MM-DD or an RFC3339 time")
+}
+
+// monthOrRange resolves ?m=YYYY-MM or ?from=&to= into a [start,end) window.
+func monthOrRange(c *fiber.Ctx) (time.Time, time.Time, error) {
+	if m := c.Query("m"); m != "" {
+		start, end, err := models.MonthRange(m)
+		if err != nil {
+			return start, end, badField("m", "m must be YYYY-MM")
 		}
+		return start, end, nil
 	}
-	return def
+	return parseRange(c)
 }
 
 func atoiDefault(s string, def int) int {
@@ -90,6 +123,77 @@ func derefF64(p *float64) float64 {
 	return *p
 }
 
+// actorOf names who is making a request: the signed-in username, or "local"
+// when the API runs in open (no-login) mode.
+func actorOf(c *fiber.Ctx) string {
+	if s, ok := c.Locals("session").(models.AuthSession); ok && s.Username != "" {
+		return s.Username
+	}
+	return "local"
+}
+
+// oneOf validates an enum-ish string field.
+func oneOf(field, v string, allowed ...string) error {
+	for _, a := range allowed {
+		if v == a {
+			return nil
+		}
+	}
+	return badField(field, field+" must be one of: "+strings.Join(allowed, ", "))
+}
+
+// requireReason returns the trimmed reason, or a REASON_REQUIRED error.
+// Voids and material corrections of money or stock always carry one.
+func requireReason(reason, what string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "", &APIError{Status: http.StatusBadRequest, Code: CodeReasonRequired,
+			Message: "a reason is required to " + what, Field: "reason"}
+	}
+	if len(reason) > 500 {
+		return "", badField("reason", "reason must be at most 500 characters")
+	}
+	return reason, nil
+}
+
+// validMoney rejects NaN/Inf and absurd magnitudes before rounding.
+func validMoney(field string, v float64, allowZero bool) (float64, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1e9 {
+		return 0, badField(field, field+" must be a non-negative amount")
+	}
+	v = round2(v)
+	if !allowZero && v <= 0 {
+		return 0, badField(field, field+" must be positive")
+	}
+	return v, nil
+}
+
+// sanityTime rejects instants far outside the app's plausible range (a
+// mistyped year would otherwise land a payment in 1926 or 2226).
+func sanityTime(field string, t time.Time) error {
+	if t.Year() < 2000 || t.Year() > 2100 {
+		return badField(field, field+" is out of range")
+	}
+	return nil
+}
+
+// loadTrainee resolves a trainee id, failing with TRAINEE_NOT_FOUND when the
+// id is malformed or no longer exists, so no record links to a ghost.
+func loadTrainee(ctx context.Context, store *db.Store, hex, field string) (models.Trainee, error) {
+	var t models.Trainee
+	id, err := primitive.ObjectIDFromHex(hex)
+	if err != nil {
+		return t, &APIError{Status: http.StatusBadRequest, Code: CodeTraineeNotFound, Message: "unknown trainee", Field: field}
+	}
+	if err := store.Coll(models.CollTrainees).FindOne(ctx, bson.M{"_id": id}).Decode(&t); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return t, &APIError{Status: http.StatusBadRequest, Code: CodeTraineeNotFound, Message: "that trainee no longer exists", Field: field}
+		}
+		return t, err
+	}
+	return t, nil
+}
+
 // traineeNames batch-resolves trainee display names for a set of ids.
 func traineeNames(ctx context.Context, store *db.Store, ids []primitive.ObjectID) map[primitive.ObjectID]string {
 	out := map[primitive.ObjectID]string{}
@@ -106,4 +210,9 @@ func traineeNames(ctx context.Context, store *db.Store, ids []primitive.ObjectID
 		out[t.ID] = t.Name
 	}
 	return out
+}
+
+// isDup reports a unique-index violation.
+func isDup(err error) bool {
+	return mongo.IsDuplicateKeyError(err)
 }

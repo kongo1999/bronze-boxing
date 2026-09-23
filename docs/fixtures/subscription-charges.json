@@ -1,0 +1,15 @@
+[
+  {
+    "createdAt": "<timestamp>",
+    "due": 50,
+    "id": "<id>",
+    "paidAmount": 20,
+    "periodMonth": "<YYYY-MM>",
+    "remaining": 30,
+    "source": "normal",
+    "state": "partial",
+    "trainee": "<id>",
+    "traineeName": "Karim Haddad",
+    "updatedAt": "<timestamp>"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "attendees": [
+    {
+      "status": "booked",
+      "trainee": "<id>",
+      "traineeName": "Karim Haddad"
+    }
+  ],
+  "capacity": 12,
+  "createdAt": "<timestamp>",
+  "durationMin": 60,
+  "id": "<id>",
+  "location": "Main floor",
+  "start": "<timestamp>",
+  "status": "scheduled",
+  "title": "Evening Group Class",
+  "type": "group",
+  "updatedAt": "<timestamp>"
+}

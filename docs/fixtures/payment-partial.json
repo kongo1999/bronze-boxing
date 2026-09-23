@@ -1,0 +1,12 @@
+{
+  "amount": 20,
+  "createdAt": "<timestamp>",
+  "createdBy": "local",
+  "date": "<timestamp>",
+  "id": "<id>",
+  "note": "Half now",
+  "periodMonth": "<YYYY-MM>",
+  "trainee": "<id>",
+  "traineeName": "Karim Haddad",
+  "type": "subscription"
+}

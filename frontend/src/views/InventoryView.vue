@@ -19,6 +19,8 @@ import Pagination from "@/components/ui/Pagination.vue";
 import SearchSelect from "@/components/ui/SearchSelect.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { askReason } from "@/lib/prompt";
+import { errMsg } from "@/lib/api";
 
 const items = ref<InventoryItem[]>([]);
 const trainees = ref<Trainee[]>([]);
@@ -139,6 +141,20 @@ function openEdit(i: InventoryItem) {
 }
 async function saveEdit(i: InventoryItem) {
   if (savingEdit.value || !editForm.name.trim() || editForm.price <= 0) return;
+  // Changing the count is a stock correction: it goes in the stock ledger
+  // with a reason, so the ledger keeps adding up to what's on the shelf.
+  let reason = "";
+  if (editForm.stock !== i.stock) {
+    const r = await askReason({
+      title: "Correct the stock count?",
+      message: `${i.name}: ${i.stock} → ${editForm.stock} in stock. Recorded as a correction in the item's stock history.`,
+      confirmLabel: "Save correction",
+      tone: "primary",
+      suggestions: ["Counted the shelf", "Damaged", "Found extra"],
+    });
+    if (r === null) return;
+    reason = r;
+  }
   savingEdit.value = true;
   try {
     // Full-replace endpoint: carry over fields the form doesn't expose so they
@@ -148,13 +164,14 @@ async function saveEdit(i: InventoryItem) {
       sku: i.sku ?? "",
       costPrice: i.costPrice ?? 0,
       active: i.active,
+      reason,
     });
     editFor.value = null;
     clearCache();
     await load();
     toast("Item updated.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't update item.", "error");
+    toast(errMsg(e, "Couldn't update item."), "error");
   } finally {
     savingEdit.value = false;
   }

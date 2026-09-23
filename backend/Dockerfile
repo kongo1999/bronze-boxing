@@ -10,6 +10,13 @@ COPY . .
 # Static binaries (no CGO) so they run on distroless/scratch.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/seed ./cmd/seed
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+# ── migrations (explicit: `docker compose run --rm migrate`) ─────────────
+FROM gcr.io/distroless/static-debian12:nonroot AS migrate
+COPY --from=build /out/migrate /migrate
+USER nonroot:nonroot
+ENTRYPOINT ["/migrate"]
 
 # ── seeder (one-off: wipes the DB and loads demo data) ──────────────────
 # Built only when requested via `target: seed` (compose `seed` service).

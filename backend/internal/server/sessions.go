@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -46,30 +47,45 @@ type sessionInput struct {
 	Attendees   []attendeeInput `json:"attendees"`
 }
 
-// buildAttendees resolves attendee trainee ids + names from input.
-func (h *sessionHandler) buildAttendees(ctx context.Context, in []attendeeInput) []models.Attendee {
+var (
+	sessionTypes    = []string{models.SessionGroup, models.SessionPrivate}
+	sessionStatuses = []string{models.SessScheduled, models.SessCompleted, models.SessCancelled}
+	attendStatuses  = []string{models.AttendBooked, models.AttendAttended, models.AttendNoShow}
+)
+
+// buildAttendees resolves attendee trainee ids + names from input. Every id
+// must be a trainee that exists, and nobody may be booked twice.
+func (h *sessionHandler) buildAttendees(ctx context.Context, in []attendeeInput) ([]models.Attendee, error) {
 	ids := make([]primitive.ObjectID, 0, len(in))
-	parsed := make([]primitive.ObjectID, len(in))
-	for i, a := range in {
+	seen := map[primitive.ObjectID]bool{}
+	for _, a := range in {
 		id, err := primitive.ObjectIDFromHex(a.Trainee)
-		if err == nil {
-			parsed[i] = id
-			ids = append(ids, id)
+		if err != nil {
+			return nil, apiErr(http.StatusBadRequest, CodeTraineeNotFound, "unknown trainee in attendees").withField("attendees")
 		}
+		if seen[id] {
+			return nil, apiErr(http.StatusBadRequest, CodeDuplicate, "a trainee is listed twice in attendees").withField("attendees")
+		}
+		seen[id] = true
+		if err := oneOf("attendees.status", defaultStr(a.Status, models.AttendBooked), attendStatuses...); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
 	}
 	names := traineeNames(ctx, h.store, ids)
 	out := make([]models.Attendee, 0, len(in))
 	for i, a := range in {
-		if parsed[i].IsZero() {
-			continue
+		name, ok := names[ids[i]]
+		if !ok {
+			return nil, apiErr(http.StatusBadRequest, CodeTraineeNotFound, "a booked trainee no longer exists").withField("attendees")
 		}
 		out = append(out, models.Attendee{
-			Trainee:     parsed[i],
-			TraineeName: names[parsed[i]],
+			Trainee:     ids[i],
+			TraineeName: name,
 			Status:      defaultStr(a.Status, models.AttendBooked),
 		})
 	}
-	return out
+	return out, nil
 }
 
 func (h *sessionHandler) list(c *fiber.Ctx) error {
@@ -78,8 +94,11 @@ func (h *sessionHandler) list(c *fiber.Ctx) error {
 
 	filter := bson.M{}
 	if c.Query("from") != "" || c.Query("to") != "" {
-		from, to := parseRange(c)
-		filter["start"] = bson.M{"$gte": from, "$lte": to}
+		from, to, err := parseRange(c)
+		if err != nil {
+			return err
+		}
+		filter["start"] = bson.M{"$gte": from, "$lt": to}
 	}
 	cur, err := h.store.Coll(models.CollSessions).
 		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "start", Value: 1}}))
@@ -113,35 +132,56 @@ func (h *sessionHandler) create(c *fiber.Ctx) error {
 
 	var in sessionInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+		return badField("body", "invalid body")
 	}
 	if strings.TrimSpace(in.Title) == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "title is required")
+		return badField("title", "title is required")
 	}
 	if in.Start == nil {
-		return fiber.NewError(fiber.StatusBadRequest, "start is required")
+		return badField("start", "start is required")
 	}
-	if in.DurationMin < 0 || in.Capacity < 0 || derefF64(in.Fee) < 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "duration, capacity and fee must be non-negative")
+	if err := sanityTime("start", *in.Start); err != nil {
+		return err
+	}
+	if in.DurationMin <= 0 || in.DurationMin > 24*60 {
+		return badField("durationMin", "duration must be between 1 and 1440 minutes")
+	}
+	if in.Capacity < 0 {
+		return badField("capacity", "capacity can't be negative (0 means unlimited)")
+	}
+	if derefF64(in.Fee) < 0 {
+		return badField("fee", "fee can't be negative")
+	}
+	typ := defaultStr(in.Type, models.SessionGroup)
+	status := defaultStr(in.Status, models.SessScheduled)
+	if err := oneOf("type", typ, sessionTypes...); err != nil {
+		return err
+	}
+	if err := oneOf("status", status, sessionStatuses...); err != nil {
+		return err
+	}
+	attendees, err := h.buildAttendees(ctx, in.Attendees)
+	if err != nil {
+		return err
 	}
 	now := time.Now()
 	s := models.Session{
 		Title:       strings.TrimSpace(in.Title),
-		Type:        defaultStr(in.Type, models.SessionGroup),
+		Type:        typ,
 		Start:       *in.Start,
 		DurationMin: in.DurationMin,
 		Location:    derefStr(in.Location),
 		Capacity:    in.Capacity,
-		Fee:         derefF64(in.Fee),
-		Status:      defaultStr(in.Status, models.SessScheduled),
-		Attendees:   h.buildAttendees(ctx, in.Attendees),
+		Fee:         round2(derefF64(in.Fee)),
+		Status:      status,
+		Attendees:   attendees,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	if clash, err := h.findOverlap(ctx, s.Type, s.Start, s.DurationMin, nil); err != nil {
 		return err
 	} else if clash != nil {
-		return fiber.NewError(fiber.StatusConflict, overlapMsg(s.Type, clash))
+		return apiErr(http.StatusConflict, CodeScheduleClash, overlapMsg(s.Type, clash))
 	}
 	res, err := h.store.Coll(models.CollSessions).InsertOne(ctx, s)
 	if err != nil {
@@ -160,20 +200,32 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 	}
 	var in sessionInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+		return badField("body", "invalid body")
 	}
 	set := bson.M{"updatedAt": time.Now()}
 	if in.Title != "" {
 		set["title"] = strings.TrimSpace(in.Title)
 	}
 	if in.Type != "" {
+		if err := oneOf("type", in.Type, sessionTypes...); err != nil {
+			return err
+		}
 		set["type"] = in.Type
 	}
 	if in.Start != nil {
+		if err := sanityTime("start", *in.Start); err != nil {
+			return err
+		}
 		set["start"] = *in.Start
+	}
+	if in.DurationMin < 0 || in.DurationMin > 24*60 {
+		return badField("durationMin", "duration must be between 1 and 1440 minutes")
 	}
 	if in.DurationMin > 0 {
 		set["durationMin"] = in.DurationMin
+	}
+	if in.Capacity < 0 {
+		return badField("capacity", "capacity can't be negative (0 means unlimited)")
 	}
 	// Only touch location/fee when the caller actually sent them — otherwise a
 	// partial update (e.g. just changing the time) would blank the location and
@@ -186,15 +238,22 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 	}
 	if in.Fee != nil {
 		if *in.Fee < 0 {
-			return fiber.NewError(fiber.StatusBadRequest, "fee must be non-negative")
+			return badField("fee", "fee can't be negative")
 		}
 		set["fee"] = *in.Fee
 	}
 	if in.Status != "" {
+		if err := oneOf("status", in.Status, sessionStatuses...); err != nil {
+			return err
+		}
 		set["status"] = in.Status
 	}
 	if in.Attendees != nil {
-		set["attendees"] = h.buildAttendees(ctx, in.Attendees)
+		attendees, err := h.buildAttendees(ctx, in.Attendees)
+		if err != nil {
+			return err
+		}
+		set["attendees"] = attendees
 	}
 	// Re-check overlaps only when a time-affecting field moved — a status-only
 	// or attendee-only edit can't create a clash and shouldn't pay for the query.
@@ -216,7 +275,7 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 		if clash, err := h.findOverlap(ctx, typ, start, dur, &id); err != nil {
 			return err
 		} else if clash != nil {
-			return fiber.NewError(fiber.StatusConflict, overlapMsg(typ, clash))
+			return apiErr(http.StatusConflict, CodeScheduleClash, overlapMsg(typ, clash))
 		}
 	}
 	if _, err := h.store.Coll(models.CollSessions).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
@@ -258,16 +317,17 @@ func (h *sessionHandler) attendance(c *fiber.Ctx) error {
 	}
 	var in attendanceInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
-	}
-	tid, err := primitive.ObjectIDFromHex(in.Trainee)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
+		return badField("body", "invalid body")
 	}
 	status := defaultStr(in.Status, models.AttendBooked)
-	if status != models.AttendBooked && status != models.AttendAttended && status != models.AttendNoShow {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid attendance status")
+	if err := oneOf("status", status, attendStatuses...); err != nil {
+		return err
 	}
+	trainee, err := loadTrainee(ctx, h.store, in.Trainee, "trainee")
+	if err != nil {
+		return err
+	}
+	tid := trainee.ID
 	coll := h.store.Coll(models.CollSessions)
 	now := time.Now()
 
@@ -282,11 +342,10 @@ func (h *sessionHandler) attendance(c *fiber.Ctx) error {
 		// 2) Not present — push a new attendee, but only while still absent. This
 		// avoids the read-modify-write race where two concurrent calls would each
 		// rewrite the whole array and lose one update.
-		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
 		push, err := coll.UpdateOne(ctx,
 			bson.M{"_id": id, "attendees.trainee": bson.M{"$ne": tid}},
 			bson.M{
-				"$push": bson.M{"attendees": models.Attendee{Trainee: tid, TraineeName: names[tid], Status: status}},
+				"$push": bson.M{"attendees": models.Attendee{Trainee: tid, TraineeName: trainee.Name, Status: status}},
 				"$set":  bson.M{"updatedAt": now},
 			})
 		if err != nil {
@@ -335,16 +394,22 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 
 	var in recurringInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+		return badField("body", "invalid body")
 	}
 	if strings.TrimSpace(in.Title) == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "title is required")
+		return badField("title", "title is required")
 	}
 	if in.From == nil || in.To == nil {
-		return fiber.NewError(fiber.StatusBadRequest, "from and to are required")
+		return badField("from", "from and to are required")
 	}
 	if len(in.Weekdays) == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "at least one weekday is required")
+		return badField("weekdays", "at least one weekday is required")
+	}
+	if in.DurationMin <= 0 || in.DurationMin > 24*60 {
+		return badField("durationMin", "duration must be between 1 and 1440 minutes")
+	}
+	if err := oneOf("type", defaultStr(in.Type, models.SessionGroup), sessionTypes...); err != nil {
+		return err
 	}
 	hh, mm := 18, 0
 	if parts := strings.Split(in.Time, ":"); len(parts) == 2 {
@@ -353,9 +418,15 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 	}
 	want := map[int]bool{}
 	for _, d := range in.Weekdays {
+		if d < 0 || d > 6 {
+			return badField("weekdays", "weekdays must be 0 (Sunday) to 6 (Saturday)")
+		}
 		want[d] = true
 	}
-	attendees := h.buildAttendees(ctx, in.Attendees)
+	attendees, err := h.buildAttendees(ctx, in.Attendees)
+	if err != nil {
+		return err
+	}
 	seriesID := primitive.NewObjectID().Hex()
 
 	var docs []any
@@ -406,9 +477,14 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 		}
 	}
 	if len(conflicts) > 0 {
-		return fiber.NewError(fiber.StatusConflict, fmt.Sprintf(
+		dates := make([]string, len(conflicts))
+		for i, t := range conflicts {
+			dates[i] = t.In(time.Local).Format(time.RFC3339)
+		}
+		return apiErr(http.StatusConflict, CodeScheduleClash, fmt.Sprintf(
 			"%d session(s) in this series overlap existing bookings (first: %s). %s",
-			len(conflicts), conflicts[0].Format("Mon Jan 2, 3:04 PM"), ruleHint(defaultStr(in.Type, models.SessionGroup))))
+			len(conflicts), conflicts[0].In(time.Local).Format("Mon Jan 2, 3:04 PM"), ruleHint(defaultStr(in.Type, models.SessionGroup)))).
+			withDetails(map[string]any{"conflicts": dates})
 	}
 	if _, err := h.store.Coll(models.CollSessions).InsertMany(ctx, docs); err != nil {
 		return err

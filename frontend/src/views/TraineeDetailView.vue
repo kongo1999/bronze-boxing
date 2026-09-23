@@ -15,6 +15,7 @@ import Alert from "@/components/ui/Alert.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { btnClasses } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import { STATE_LABEL, STATE_TONE, collectable, collectLink } from "@/lib/dues";
 
 const route = useRoute();
 const router = useRouter();
@@ -28,9 +29,7 @@ const { data: subs } = useCachedAsync(`subs:${month}`, () => api.get<SubStatus[]
 // This month's dues, straight from the same endpoint the Money page uses — so
 // the two screens can never disagree about who owes what.
 const dues = computed(() => (subs.value ?? []).find((s) => s.trainee.id === id));
-const remaining = computed(() => (dues.value ? Math.max(0, dues.value.due - dues.value.amountPaid) : 0));
-const duesTone: Record<string, "paid" | "partial" | "overdue"> = { paid: "paid", partial: "partial", unpaid: "overdue" };
-const duesLabel: Record<string, string> = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" };
+const remaining = computed(() => dues.value?.remaining ?? 0);
 
 // Voided payments stay visible (struck through) — the ledger never hides a
 // record, it marks it.
@@ -39,10 +38,8 @@ const history = computed(() =>
 );
 const { page, pageCount, items, total, from, to } = usePaged(history, 8);
 
-const collectLink = computed(
-  () =>
-    `/payments/new?trainee=${id}&type=subscription&periodMonth=${month}` +
-    (remaining.value > 0 ? `&amount=${remaining.value}` : ""),
+const collectHref = computed(() =>
+  dues.value ? collectLink(dues.value) : `/payments/new?trainee=${id}&type=subscription&periodMonth=${month}`,
 );
 
 const deleting = ref(false);
@@ -112,13 +109,14 @@ async function remove() {
           <p v-else class="mt-0.5 text-sm text-muted">
             {{ trainee.monthlyFee > 0 ? "Not on this month's subscription list." : "No monthly fee set." }}
           </p>
-          <p v-if="dues && remaining > 0" class="text-xs text-faint">{{ money(remaining) }} still owed</p>
+          <p v-if="dues && remaining > 0 && dues.state !== 'unverified'" class="text-xs text-faint">{{ money(remaining) }} still owed</p>
+          <p v-if="dues?.state === 'unverified'" class="text-xs text-faint">Imported from older records — confirm the amount due on the Money page.</p>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-          <Badge v-if="dues" :tone="duesTone[dues.state]">{{ duesLabel[dues.state] }}</Badge>
+          <Badge v-if="dues" :tone="STATE_TONE[dues.state]">{{ STATE_LABEL[dues.state] }}</Badge>
           <RouterLink
-            v-if="!dues || dues.state !== 'paid'"
-            :to="collectLink"
+            v-if="dues ? collectable(dues) : trainee.monthlyFee > 0"
+            :to="collectHref"
             :class="btnClasses('primary', 'sm')"
           ><Wallet class="h-4 w-4" /> Collect</RouterLink>
         </div>

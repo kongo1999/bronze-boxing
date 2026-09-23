@@ -6,7 +6,8 @@ The whole app runs as three containers on one droplet:
 |---------|------|----------|
 | `web`   | Caddy — serves the Vue SPA, reverse-proxies `/api`, auto-HTTPS | **yes** (80/443) |
 | `api`   | Go (Fiber) API | no (private network) |
-| `mongo` | MongoDB 7, data in a named volume | no (private network) |
+| `mongo` | MongoDB 7 as a single-node replica set, data in a named volume | no (private network) |
+| `migrate` | One-shot data migrations (`docker compose run --rm migrate`) | no — never started by `up` |
 
 Only `web` is reachable from the internet. The API and database are only reachable
 on the private compose network.
@@ -52,10 +53,18 @@ Set at minimum:
 
 ## 6. Launch
 ```bash
-docker compose up -d --build
+docker compose build
+docker compose up -d mongo              # first boot: creates the root user, then the replica set
+docker compose run --rm migrate         # indexes + dues/stock ledgers (safe on an empty database)
+docker compose up -d
 docker compose ps
-docker compose logs -f api        # watch it connect to Mongo
+docker compose logs -f api              # "connected to MongoDB (… transactions true)"
 ```
+Mongo runs as a **one-node replica set** because every money and stock change
+is a multi-document transaction. The compose file handles it: a keyfile is
+generated once into the `mongo_keyfile` volume, and the health check runs
+`rs.initiate()` the first time. The API refuses to start if Mongo is not a
+replica set, or while migrations are pending — it logs exactly what to run.
 Visit `http://DROPLET_IP` (or `https://your-domain`). The SPA loads and talks to the live API.
 
 ## 7. Firewall
@@ -70,13 +79,44 @@ Mongo (27017) is **not** published to the host, so it's not internet-reachable �
 ---
 
 ## Updating after a code change
+Back up, update, migrate, start — in that order:
 ```bash
 cd bronze-boxing
+./backup-now.sh                          # or the mongodump command under "Backups"
 git pull
-docker compose up -d --build      # rebuilds changed images, recreates containers
+docker compose build
+docker compose run --rm migrate -dry-run # read what will change
+docker compose run --rm migrate          # apply (a no-op when nothing is pending)
+docker compose up -d
+docker compose run --rm migrate -verify  # dues balances and stock ledgers add up
 ```
+If `migrate -dry-run` lists items under **needs review**, they are real-data
+questions (e.g. an old subscription payment with no period) — the migration
+never guesses; fix them in the app afterwards.
+
+### One-time upgrade: standalone Mongo → replica set (September 2026 release)
+The first deploy of this release restarts the existing `mongo_data` volume as
+a replica set. Data is kept; nothing is deleted. Rehearsed locally on a copy
+of the old standalone layout (legacy data → replica set → migrate twice →
+verify → API boots).
+1. **Back up** (see "Backups") and copy the archive off the droplet.
+2. `git pull && docker compose build`
+3. `docker compose up -d mongo` — recreated with `--replSet rs0 --keyFile …`;
+   wait for `docker compose ps` to show it **healthy** (the health check
+   initiates the replica set).
+4. `docker compose run --rm migrate -dry-run`, read it, then
+   `docker compose run --rm migrate`.
+5. `docker compose up -d`, then `docker compose run --rm migrate -verify`.
+
+**Rollback:** `git checkout <previous commit> && docker compose up -d --build`.
+The previous version starts on the same volume (Mongo runs standalone again
+and ignores the replica-set config); the new collections (`subscription_terms`,
+`subscription_charges`, `stock_movements`, `schema_migrations`) are simply
+unused by it. Restore the backup only if you must also undo data entered
+after the upgrade.
 
 ## Backups (Mongo)
+Take one before every update. `backup-now.sh` in the repo root wraps this.
 ```bash
 # dump to a file on the host
 docker compose exec -T mongo mongodump --username "$MONGO_USER" --password "$MONGO_PASSWORD" \
@@ -122,6 +162,8 @@ For a real studio, skip this and enter data through the UI.
 - `/api/health` stays public for uptime checks and reports `authRequired`.
 
 ## Troubleshooting
+- **API exits: "MongoDB is not a replica set"** → the `mongo` service is still the old definition, or unhealthy. `docker compose up -d mongo`, wait for healthy, then `docker compose up -d api`. Emergency-only escape: `MONGO_ALLOW_STANDALONE=true` (money/stock changes stop being atomic).
+- **API exits: "pending migrations"** → back up, then `docker compose run --rm migrate`.
 - **Build killed / OOM** → droplet too small; use 2 GB+ or `docker compose build` one service at a time.
 - **API can't reach Mongo** → check `MONGO_USER`/`MONGO_PASSWORD` match in `.env`; `docker compose logs mongo`.
 - **HTTPS not issued** → DNS A record must resolve to the droplet and ports 80+443 open before Caddy can get a cert; check `docker compose logs web`.

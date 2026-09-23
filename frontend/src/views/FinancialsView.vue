@@ -19,6 +19,8 @@ import Pagination from "@/components/ui/Pagination.vue";
 import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
+import { errMsg } from "@/lib/api";
 
 const month = ref(monthKey());
 const fin = ref<Financials>();
@@ -99,15 +101,21 @@ async function addExpense() {
 }
 // Voids, not deletes: the record stays in the books marked VOID and stops
 // counting toward outgoings.
-async function voidExpense(id: string) {
-  if (!confirm("Void this expense? It stays in the books marked VOID and stops counting.")) return;
+async function voidExpense(e: Expense) {
+  const reason = await askReason({
+    title: "Void this expense?",
+    message: `${money(e.amount)} (${catLabel[e.category] ?? e.category}) stays in the books marked VOID and stops counting toward outgoings.`,
+    confirmLabel: "Void expense",
+    suggestions: VOID_REASONS,
+  });
+  if (reason === null) return;
   try {
-    await api.del(`/expenses/${id}`);
+    await api.post(`/expenses/${e.id}/void`, { reason });
     clearCache();
     load();
     toast("Expense voided.", "success");
-  } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't void expense.", "error");
+  } catch (err) {
+    toast(errMsg(err, "Couldn't void expense."), "error");
   }
 }
 
@@ -137,9 +145,22 @@ function openEditExpense(e: Expense) {
 }
 async function saveExpenseEdit(id: string) {
   if (savingEdit.value || editForm.amount <= 0) return;
+  const original = expenses.value.find((x) => x.id === id);
+  let reason = "";
+  if (original && Math.round(original.amount * 100) !== Math.round(editForm.amount * 100)) {
+    const r = await askReason({
+      title: "Correct the amount?",
+      message: `${money(original.amount)} → ${money(editForm.amount)}. The change is kept in this expense's history.`,
+      confirmLabel: "Save correction",
+      tone: "primary",
+      suggestions: CORRECTION_REASONS,
+    });
+    if (r === null) return;
+    reason = r;
+  }
   savingEdit.value = true;
   try {
-    await api.put(`/expenses/${id}`, { amount: editForm.amount, category: editForm.category, note: editForm.note });
+    await api.put(`/expenses/${id}`, { amount: editForm.amount, category: editForm.category, note: editForm.note, reason });
     editingId.value = null;
     clearCache();
     await load();
@@ -225,7 +246,7 @@ const catLabel: Record<string, string> = {
                 <span class="font-display text-sm text-overdue tnum" :class="e.voidedAt ? 'line-through text-faint' : ''">−{{ money(e.amount) }}</span>
                 <template v-if="!e.voidedAt">
                   <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit expense" @click="openEditExpense(e)"><Pencil class="h-4 w-4" /></button>
-                  <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void expense" @click="voidExpense(e.id)">×</button>
+                  <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void expense" @click="voidExpense(e)">×</button>
                 </template>
               </div>
             </div>

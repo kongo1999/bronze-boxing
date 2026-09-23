@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -14,21 +14,41 @@ import (
 	"bronzeboxing/internal/models"
 )
 
-// writeAudit appends one line to the money audit trail. Best-effort by design:
-// an audit hiccup must never fail the user's actual operation, but it is
-// logged loudly so it can't go quietly missing.
-func writeAudit(ctx context.Context, store *db.Store, entity string, ref primitive.ObjectID, action string, before, after any) {
-	_, err := store.Coll(models.CollAudit).InsertOne(ctx, models.AuditEntry{
-		Entity: entity,
-		Ref:    ref,
-		Action: action,
-		Before: before,
-		After:  after,
+// auditLine is one change to record in the trail.
+type auditLine struct {
+	Entity string
+	Ref    primitive.ObjectID
+	Action string
+	Before any
+	After  any
+	Actor  string
+	Reason string
+}
+
+// writeAudit appends one line to the audit trail. Call it with the same ctx
+// as the change it describes: inside WithTx that makes the line part of the
+// transaction, so a change can never commit without its line, and a failed
+// audit write rolls the change back instead of leaving a silent gap.
+func writeAudit(ctx context.Context, store *db.Store, l auditLine) error {
+	if _, err := store.Coll(models.CollAudit).InsertOne(ctx, models.AuditEntry{
+		Entity: l.Entity,
+		Ref:    l.Ref,
+		Action: l.Action,
+		Before: l.Before,
+		After:  l.After,
+		Actor:  l.Actor,
+		Reason: l.Reason,
 		At:     time.Now(),
-	})
-	if err != nil {
-		log.Printf("AUDIT WRITE FAILED (%s %s %s): %v", entity, action, ref.Hex(), err)
+	}); err != nil {
+		return fmt.Errorf("audit %s %s: %w", l.Entity, l.Action, err)
 	}
+	return nil
+}
+
+// auditEntities are the record kinds the trail can be read for.
+var auditEntities = map[string]bool{
+	"payment": true, "expense": true, "sale": true, "charge": true,
+	"item": true, "trainee": true, "series": true, "session": true, "plan": true,
 }
 
 // jsonable turns the driver's generic BSON values into shapes that marshal to
@@ -76,20 +96,20 @@ type auditOut struct {
 	Action string    `json:"action"`
 	Before any       `json:"before,omitempty"`
 	After  any       `json:"after,omitempty"`
+	Actor  string    `json:"actor,omitempty"`
+	Reason string    `json:"reason,omitempty"`
 	At     time.Time `json:"at"`
 }
 
 // registerAudit exposes the trail read-only: GET /api/audit/:entity/:id lists
-// every recorded change for one payment, expense, or sale, newest first.
+// every recorded change for one record, newest first.
 func registerAudit(r fiber.Router, store *db.Store) {
 	r.Get("/audit/:entity/:id", func(c *fiber.Ctx) error {
 		ctx, cancel := reqCtx()
 		defer cancel()
 		entity := c.Params("entity")
-		switch entity {
-		case "payment", "expense", "sale":
-		default:
-			return fiber.NewError(fiber.StatusBadRequest, "entity must be payment, expense or sale")
+		if !auditEntities[entity] {
+			return badField("entity", "unknown audit entity")
 		}
 		id, err := objID(c)
 		if err != nil {
@@ -114,6 +134,8 @@ func registerAudit(r fiber.Router, store *db.Store) {
 				Action: e.Action,
 				Before: jsonable(e.Before),
 				After:  jsonable(e.After),
+				Actor:  e.Actor,
+				Reason: e.Reason,
 				At:     e.At,
 			}
 		}

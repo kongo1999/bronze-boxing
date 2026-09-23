@@ -7,9 +7,9 @@ import { ref } from "vue";
 import { History } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
-import { money } from "@/lib/format";
+import { money, formatLongDate } from "@/lib/format";
 
-const props = defineProps<{ entity: "payment" | "expense" | "sale"; id: string }>();
+const props = defineProps<{ entity: AuditEntry["entity"]; id: string }>();
 
 const open = ref(false);
 const loading = ref(false);
@@ -43,15 +43,29 @@ const LABELS: Record<string, string> = {
   unitPrice: "Unit price",
   total: "Total",
   itemName: "Item",
-  voidReason: "Void reason",
+  due: "Amount due",
+  stock: "Stock",
+  price: "Price",
+  name: "Name",
+  date: "Date",
 };
-const MONEY_FIELDS = new Set(["amount", "unitPrice", "total"]);
+const MONEY_FIELDS = new Set(["amount", "unitPrice", "total", "due", "price"]);
 
 function show(field: string, v: unknown): string {
   if (v === undefined || v === null || v === "") return "—";
   if (MONEY_FIELDS.has(field) && typeof v === "number") return money(v);
+  if (field === "date" && typeof v === "string") return formatLongDate(v);
   return String(v);
 }
+
+const ACTION_LABEL: Record<string, string> = {
+  create: "Recorded",
+  update: "Edited",
+  void: "Voided",
+  adjust: "Dues adjusted",
+  terms: "Fee / status changed",
+  return: "Returned",
+};
 
 interface Change { label: string; before: string; after: string }
 
@@ -86,17 +100,18 @@ const when = (iso: string) =>
       <p v-if="loading" class="text-xs text-faint">Loading history…</p>
       <p v-else-if="error" class="text-xs text-overdue">{{ error }}</p>
       <p v-else-if="(entries ?? []).length === 0" class="text-xs text-faint">
-        No changes recorded — this record is exactly as it was created.
+        No history recorded yet.
       </p>
       <ul v-else class="space-y-2">
         <li v-for="e in entries" :key="e.id" class="rounded-lg border border-line bg-elevated/60 px-3 py-2">
           <p class="flex items-center justify-between gap-2 text-xs">
             <span class="font-medium" :class="e.action === 'void' ? 'text-overdue' : 'text-bronze'">
-              {{ e.action === "void" ? "Voided" : "Edited" }}
+              {{ ACTION_LABEL[e.action] ?? e.action }}
             </span>
-            <span class="text-faint">{{ when(e.at) }}</span>
+            <span class="text-faint">{{ when(e.at) }}<template v-if="e.actor"> · {{ e.actor }}</template></span>
           </p>
-          <ul v-if="e.action !== 'void'" class="mt-1 space-y-0.5">
+          <p v-if="e.reason" class="mt-0.5 text-xs text-muted">“{{ e.reason }}”</p>
+          <ul v-if="e.action !== 'void' && e.action !== 'create'" class="mt-1 space-y-0.5">
             <li v-for="c in changes(e)" :key="c.label" class="text-xs text-muted">
               {{ c.label }}: <span class="text-faint line-through">{{ c.before }}</span>
               <span class="mx-1 text-faint">→</span><span class="text-fg">{{ c.after }}</span>

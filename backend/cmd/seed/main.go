@@ -2,13 +2,16 @@
 // Run with: go run ./cmd/seed
 //
 // WARNING: clears trainees, sessions, payments, reminders, expenses,
-// inventory and sales collections first.
+// inventory, sales, dues (terms/charges), stock ledger, audit trail and the
+// migration record first, then re-runs the migrations over the demo data.
+// Only ever point it at a disposable database.
 package main
 
 import (
 	"context"
 	"log"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,7 +19,9 @@ import (
 
 	"bronzeboxing/internal/config"
 	"bronzeboxing/internal/db"
+	"bronzeboxing/internal/migrate"
 	"bronzeboxing/internal/models"
+	"bronzeboxing/internal/server"
 )
 
 func at(day time.Time, h, m int) time.Time {
@@ -26,6 +31,9 @@ func at(day time.Time, h, m int) time.Time {
 func main() {
 	_ = godotenv.Load()
 	cfg := config.Load()
+	if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
+		time.Local = loc
+	}
 	store, err := db.Connect(cfg.MongoURI, cfg.DBName)
 	if err != nil {
 		log.Fatalf("connect: %v", err)
@@ -36,6 +44,7 @@ func main() {
 	for _, c := range []string{
 		models.CollTrainees, models.CollSessions, models.CollPayments,
 		models.CollReminders, models.CollExpenses, models.CollInventory, models.CollSales,
+		models.CollTerms, models.CollCharges, models.CollMovements, models.CollAudit, migrate.Coll,
 	} {
 		if _, err := store.Coll(c).DeleteMany(ctx, bson.M{}); err != nil {
 			log.Fatalf("clear %s: %v", c, err)
@@ -47,7 +56,7 @@ func main() {
 
 	// Monday of the current week.
 	weekday := int(now.Weekday()) // Sun=0
-	offset := (weekday + 6) % 7    // days since Monday
+	offset := (weekday + 6) % 7   // days since Monday
 	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).AddDate(0, 0, -offset)
 
 	log.Println("creating trainees...")
@@ -180,6 +189,12 @@ func main() {
 		Qty: 1, UnitPrice: 8, Total: 8, Date: now, CreatedAt: now}
 	if _, err := store.Coll(models.CollSales).InsertOne(ctx, sale); err != nil {
 		log.Fatalf("sale: %v", err)
+	}
+
+	log.Println("running migrations over the demo data...")
+	r := &migrate.Runner{Store: store, Logf: log.Printf}
+	if err := r.Run(ctx, server.Migrations(), migrate.Options{}); err != nil {
+		log.Fatalf("migrate: %v", err)
 	}
 
 	counts := map[string]int64{}

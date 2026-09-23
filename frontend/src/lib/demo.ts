@@ -22,6 +22,8 @@ const iso = (dayOffset: number, h = 9, m = 0): string => {
   return d.toISOString();
 };
 const nowISO = now.toISOString();
+const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayOf = (offset: number) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset));
 const MONTH = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 let seq = 1000;
 const genId = () => `demo-${++seq}`;
@@ -99,11 +101,11 @@ const payments: Payment[] = [
 
 // ── Reminders ────────────────────────────────────────────────────────────────
 const reminders: Reminder[] = [
-  { id: "r1", title: "Fix the speed-bag bracket", dueDate: iso(-1, 9), priority: "high", done: false, createdAt: nowISO },
-  { id: "r2", title: "Call Rami about his schedule", dueDate: iso(0, 9), priority: "normal", done: false, createdAt: nowISO },
-  { id: "r3", title: "Order new gloves (size M)", dueDate: iso(2, 9), priority: "normal", done: false, createdAt: nowISO },
-  { id: "r4", title: "Renew gym insurance", dueDate: iso(4, 9), priority: "high", done: false, createdAt: nowISO },
-  { id: "r5", title: "Wipe down the ring canvas", dueDate: iso(-2, 9), priority: "low", done: true, createdAt: nowISO },
+  { id: "r1", title: "Fix the speed-bag bracket", dueDay: dayOf(-1), dueDate: iso(-1, 0), priority: "high", done: false, createdAt: nowISO },
+  { id: "r2", title: "Call Rami about his schedule", dueDay: dayOf(0), dueDate: iso(0, 0), priority: "normal", done: false, createdAt: nowISO },
+  { id: "r3", title: "Order new gloves (size M)", dueDay: dayOf(2), dueDate: iso(2, 0), priority: "normal", done: false, createdAt: nowISO },
+  { id: "r4", title: "Renew gym insurance", dueDay: dayOf(4), dueDate: iso(4, 0), priority: "high", done: false, createdAt: nowISO },
+  { id: "r5", title: "Wipe down the ring canvas", dueDay: dayOf(-2), dueDate: iso(-2, 0), priority: "low", done: true, createdAt: nowISO },
 ];
 
 // ── Expenses (this month) ─────────────────────────────────────────────────────
@@ -145,15 +147,19 @@ function logAudit(entity: AuditEntry["entity"], ref: string, action: AuditEntry[
 // ── Computed (mirror the Go backend) ─────────────────────────────────────────
 // Voided records stay in lists but never count toward money totals.
 const live = <T extends { voidedAt?: string }>(arr: T[]) => arr.filter((x) => !x.voidedAt);
-function subscriptions(): SubStatus[] {
+function subscriptions(month = MONTH): SubStatus[] {
   return trainees
     .filter((t) => t.status === "active" && t.monthlyFee > 0)
     .map((t) => {
-      const paid = live(payments)
-        .filter((p) => p.type === "subscription" && p.periodMonth === MONTH && p.trainee === t.id)
-        .reduce((s, p) => s + p.amount, 0);
-      const state = paid >= t.monthlyFee ? "paid" : paid > 0 ? "partial" : "unpaid";
-      return { trainee: t, due: t.monthlyFee, amountPaid: paid, state };
+      const mine = live(payments).filter((p) => p.type === "subscription" && p.periodMonth === month && p.trainee === t.id);
+      const paid = Math.round(mine.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+      const state: SubStatus["state"] = paid >= t.monthlyFee ? "paid" : paid > 0 ? "partial" : month > MONTH ? "upcoming" : "unpaid";
+      const last = mine.map((p) => p.date).sort().pop();
+      return {
+        trainee: t, chargeId: `c-${t.id}-${month}`, periodMonth: month, due: t.monthlyFee, amountPaid: paid,
+        remaining: Math.max(0, Math.round((t.monthlyFee - paid) * 100) / 100), state, source: "normal" as const,
+        paymentCount: mine.length, lastPaymentDate: last,
+      };
     });
 }
 function financials(): Financials {
@@ -170,14 +176,18 @@ function dashboard(): Dashboard {
   const todayStr = now.toDateString();
   const todaySessions = sessions.filter((s) => new Date(s.start).toDateString() === todayStr);
   const subs = subscriptions();
-  const overdue = subs.filter((s) => s.state !== "paid");
+  const overdue = subs.filter((s) => s.state === "partial" || s.state === "unpaid");
   const weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
   const weekReminders = reminders.filter((r) => { const d = new Date(r.dueDate); return d >= new Date(todayStr) && d < weekEnd; });
   return {
     today: nowISO, month: MONTH,
     monthRevenue: live(payments).reduce((s, p) => s + p.amount, 0),
     activeTrainees: trainees.filter((t) => t.status === "active").length,
-    overdueCount: overdue.length, todaySessions, weekReminders, overdueSubscriptions: overdue,
+    overdueCount: overdue.length,
+    partialCount: overdue.filter((s) => s.state === "partial").length,
+    unpaidCount: overdue.filter((s) => s.state === "unpaid").length,
+    outstanding: overdue.reduce((sum, s) => sum + s.remaining, 0),
+    todaySessions, weekReminders, overdueSubscriptions: overdue,
   };
 }
 
@@ -207,7 +217,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     const f = financials();
     return r(["Date,Kind,Detail,Type,Note,In,Out,Status", ...rows.sort(), "", `,,,,Total income,${f.income.toFixed(2)},,`, `,,,,Total outgoings,,${f.outgoings.toFixed(2)},`, `,,,,Net,${f.net.toFixed(2)},,`].join("\n"));
   }
-  if (path === "/subscriptions") return r(subscriptions());
+  if (path === "/subscriptions") return r(subscriptions(params.get("m") ?? MONTH));
   if (seg[0] === "audit" && seg.length === 3) {
     return r(audit.filter((a) => a.entity === seg[1] && a.ref === seg[2]));
   }
@@ -270,7 +280,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     const id = seg[1];
     if (seg[2] === "receipt") return r({ studio: "Bronze Boxing", payment: payments.find((p) => p.id === id), issued: nowISO });
     if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; logAudit("payment", id, "update", before, p); } return r(p); }
-    if (method === "DELETE") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; p.voidedAt = nowISO; logAudit("payment", id, "void", before, p); } return r({ ok: true, voided: true }); }
+    if (method === "DELETE" || seg[2] === "void") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; p.voidedAt = nowISO; p.voidReason = body.reason ?? params.get("reason") ?? ""; logAudit("payment", id, "void", before, p); } return r({ ok: true, voided: true }); }
   }
 
   // /reminders
@@ -292,7 +302,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     }
     const id = seg[1];
     if (method === "PUT") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) { const before = { ...e }; Object.assign(e, body); logAudit("expense", id, "update", before, e); } return r(e); }
-    if (method === "DELETE") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) { const before = { ...e }; e.voidedAt = nowISO; logAudit("expense", id, "void", before, e); } return r({ ok: true, voided: true }); }
+    if (method === "DELETE" || seg[2] === "void") { const e = expenses.find((x) => x.id === id); if (e && !e.voidedAt) { const before = { ...e }; e.voidedAt = nowISO; e.voidReason = body.reason ?? params.get("reason") ?? ""; logAudit("expense", id, "void", before, e); } return r({ ok: true, voided: true }); }
   }
 
   // /inventory + /sales
@@ -319,9 +329,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   if (seg[0] === "sales") {
     if (seg.length === 1) return r(sales);
     const id = seg[1];
-    if (method === "DELETE") {
+    if (method === "DELETE" || seg[2] === "void") {
       const sale = sales.find((x) => x.id === id);
-      if (sale && !sale.voidedAt) { const before = { ...sale }; const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; sale.voidedAt = nowISO; logAudit("sale", id, "void", before, sale); }
+      if (sale && !sale.voidedAt) { const before = { ...sale }; const it = inventory.find((x) => x.id === sale.item); if (it) it.stock += sale.qty; sale.voidedAt = nowISO; sale.voidReason = body.reason ?? params.get("reason") ?? ""; logAudit("sale", id, "void", before, sale); }
       return r({ ok: true, voided: true, restocked: sale?.qty ?? 0 });
     }
     if (method === "PUT") {

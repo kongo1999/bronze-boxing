@@ -1,0 +1,24 @@
+[
+  {
+    "amountPaid": 20,
+    "chargeId": "<id>",
+    "due": 50,
+    "lastPaymentDate": "<timestamp>",
+    "paymentCount": 1,
+    "periodMonth": "<YYYY-MM>",
+    "remaining": 30,
+    "source": "normal",
+    "state": "partial",
+    "trainee": {
+      "createdAt": "<timestamp>",
+      "feeFromMonth": "<YYYY-MM>",
+      "id": "<id>",
+      "monthlyFee": 50,
+      "name": "Karim Haddad",
+      "phone": "03 111 222",
+      "skillLevel": "intermediate",
+      "status": "active",
+      "updatedAt": "<timestamp>"
+    }
+  }
+]

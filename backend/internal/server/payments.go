@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"bronzeboxing/internal/db"
@@ -26,10 +30,18 @@ func registerPayments(r fiber.Router, store *db.Store) {
 	g.Post("/", h.create)
 	g.Get("/export", h.export)
 	g.Get("/:id/receipt", h.receipt)
+	g.Get("/:id", h.get)
 	g.Put("/:id", h.update)
+	g.Post("/:id/void", h.voidPost)
 	g.Delete("/:id", h.remove)
 	r.Get("/subscriptions", h.subscriptions)
+	r.Get("/subscription-charges", h.charges)
+	r.Post("/subscription-charges/:id/adjust", h.adjust)
 }
+
+// Payment types a user may record directly. "sale" payments exist only as
+// legacy mirrors of shop sales; new shop income goes through Inventory.
+var recordablePayTypes = []string{models.PaySubscription, models.PayPrivate, models.PayDropin, models.PayOther}
 
 type paymentInput struct {
 	Trainee     string     `json:"trainee"`
@@ -37,26 +49,52 @@ type paymentInput struct {
 	Type        string     `json:"type"`
 	PeriodMonth string     `json:"periodMonth"`
 	Date        *time.Time `json:"date"`
-	Note        string     `json:"note"`
+	// Day records the cash date as a studio-local YYYY-MM-DD: today means
+	// "now", another day means midday that day. Ignored when Date is sent.
+	Day    string `json:"day"`
+	Note   string `json:"note"`
+	Reason string `json:"reason"` // required when a correction changes the amount
 }
 
-// monthOrRange resolves ?m=YYYY-MM or ?from=&to= into a [start,end) window.
-func monthOrRange(c *fiber.Ctx) (time.Time, time.Time) {
-	if m := c.Query("m"); m != "" {
-		if start, end, err := models.MonthRange(m); err == nil {
-			return start, end
+// resolveRecordDate turns the optional date/day inputs into the instant the
+// money moved. Defaults to now.
+func resolveRecordDate(date *time.Time, day string) (time.Time, error) {
+	if date != nil {
+		if err := sanityTime("date", *date); err != nil {
+			return time.Time{}, err
 		}
+		return *date, nil
 	}
-	return parseRange(c)
+	if day == "" {
+		return time.Now(), nil
+	}
+	start, err := models.ParseDay(day)
+	if err != nil {
+		return time.Time{}, badField("day", "day must be YYYY-MM-DD")
+	}
+	if day == models.DateKey(time.Now()) {
+		return time.Now(), nil
+	}
+	return start.Add(12 * time.Hour), nil
 }
 
 func (h *paymentHandler) list(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
-	from, to := monthOrRange(c)
-	cur, err := h.store.Coll(models.CollPayments).Find(ctx,
-		bson.M{"date": bson.M{"$gte": from, "$lt": to}},
-		options.Find().SetSort(bson.D{{Key: "date", Value: -1}}))
+	from, to, err := monthOrRange(c)
+	if err != nil {
+		return err
+	}
+	filter := bson.M{"date": bson.M{"$gte": from, "$lt": to}}
+	if t := c.Query("trainee"); t != "" {
+		tid, err := parseOID(t, "trainee")
+		if err != nil {
+			return err
+		}
+		filter["trainee"] = tid
+	}
+	cur, err := h.store.Coll(models.CollPayments).Find(ctx, filter,
+		options.Find().SetSort(bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}}))
 	if err != nil {
 		return err
 	}
@@ -67,50 +105,132 @@ func (h *paymentHandler) list(c *fiber.Ctx) error {
 	return c.JSON(out)
 }
 
+func (h *paymentHandler) get(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	p, err := findPayment(ctx, h.store, id)
+	if err != nil {
+		return err
+	}
+	return c.JSON(p)
+}
+
+func findPayment(ctx context.Context, store *db.Store, id primitive.ObjectID) (models.Payment, error) {
+	var p models.Payment
+	if err := store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return p, notFound("payment")
+		}
+		return p, err
+	}
+	return p, nil
+}
+
+// normalizePayment validates input into the fields a payment stores. The
+// trainee must exist; a subscription must name its trainee and a real period.
+func (h *paymentHandler) normalizePayment(ctx context.Context, in paymentInput, typeLocked string) (models.Payment, *models.Trainee, error) {
+	var p models.Payment
+	amount, err := validMoney("amount", in.Amount, false)
+	if err != nil {
+		return p, nil, err
+	}
+	typ := defaultStr(strings.TrimSpace(in.Type), models.PayOther)
+	if typeLocked != "" {
+		if typ != typeLocked {
+			return p, nil, apiErr(http.StatusConflict, CodeLinkedSale,
+				"this payment mirrors a shop sale — correct or void the sale in Inventory instead of reclassifying it").withField("type")
+		}
+	} else if err := oneOf("type", typ, recordablePayTypes...); err != nil {
+		return p, nil, err
+	}
+	p.Amount, p.Type, p.Note = amount, typ, strings.TrimSpace(in.Note)
+	var trainee *models.Trainee
+	if in.Trainee != "" {
+		t, err := loadTrainee(ctx, h.store, in.Trainee, "trainee")
+		if err != nil {
+			return p, nil, err
+		}
+		trainee = &t
+		p.Trainee = &t.ID
+		p.TraineeName = t.Name
+	}
+	if typ == models.PaySubscription {
+		if trainee == nil {
+			return p, nil, badField("trainee", "a subscription payment needs its trainee")
+		}
+		if !models.ValidMonth(in.PeriodMonth) {
+			return p, nil, badField("periodMonth", "periodMonth must be the YYYY-MM the fee covers")
+		}
+		p.PeriodMonth = in.PeriodMonth
+	}
+	return p, trainee, nil
+}
+
 func (h *paymentHandler) create(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	var in paymentInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+		return badField("body", "invalid body")
 	}
-	in.Amount = round2(in.Amount)
-	if in.Amount <= 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
-	}
-	typ := defaultStr(in.Type, models.PayOther)
-	if err := validatePeriodMonth(typ, in.PeriodMonth); err != nil {
-		return err
-	}
-	p := models.Payment{
-		Amount:      in.Amount,
-		Type:        typ,
-		PeriodMonth: in.PeriodMonth,
-		Note:        in.Note,
-		Date:        time.Now(),
-		CreatedAt:   time.Now(),
-	}
-	if in.Date != nil {
-		p.Date = *in.Date
-	}
-	if in.Trainee != "" {
-		if tid, err := primitive.ObjectIDFromHex(in.Trainee); err == nil {
-			if typ == models.PaySubscription {
-				if err := checkSubscriptionOverpay(ctx, h.store, tid, in.PeriodMonth, in.Amount, nil); err != nil {
-					return err
-				}
-			}
-			p.Trainee = &tid
-			names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
-			p.TraineeName = names[tid]
-		}
-	}
-	res, err := h.store.Coll(models.CollPayments).InsertOne(ctx, p)
+	p, trainee, err := h.normalizePayment(ctx, in, "")
 	if err != nil {
 		return err
 	}
-	p.ID = res.InsertedID.(primitive.ObjectID)
+	if p.Date, err = resolveRecordDate(in.Date, in.Day); err != nil {
+		return err
+	}
+	actor := actorOf(c)
+	p.ID = primitive.NewObjectID()
+	p.CreatedAt = time.Now()
+	p.CreatedBy = actor
+
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		if p.Type == models.PaySubscription {
+			ch, err := ensureCharge(tx, h.store, *trainee, p.PeriodMonth)
+			if err != nil {
+				return err
+			}
+			if ch == nil {
+				return explainChargeRefusal(tx, h.store, trainee.ID, p.PeriodMonth, 1)
+			}
+			if err := applyChargeDelta(tx, h.store, trainee.ID, p.PeriodMonth, models.Cents(p.Amount)); err != nil {
+				return err
+			}
+		}
+		if err := failpoint("payment.afterCharge"); err != nil {
+			return err
+		}
+		if _, err := h.store.Coll(models.CollPayments).InsertOne(tx, p); err != nil {
+			return err
+		}
+		if err := failpoint("payment.afterInsert"); err != nil {
+			return err
+		}
+		return writeAudit(tx, h.store, auditLine{Entity: "payment", Ref: p.ID, Action: "create", After: p, Actor: actor})
+	})
+	if err != nil {
+		return err
+	}
 	return c.Status(fiber.StatusCreated).JSON(p)
+}
+
+// reverseFromCharge takes a live subscription payment's amount back off its
+// charge (void, or the "before" half of a correction). Payments that never
+// counted toward a charge (legacy rows without a period) are left alone.
+func reverseFromCharge(ctx context.Context, store *db.Store, p models.Payment) error {
+	if p.Type != models.PaySubscription || p.Trainee == nil || p.PeriodMonth == "" {
+		return nil
+	}
+	n, err := store.Coll(models.CollCharges).CountDocuments(ctx, chargeKey(*p.Trainee, p.PeriodMonth))
+	if err != nil || n == 0 {
+		return err
+	}
+	return applyChargeDelta(ctx, store, *p.Trainee, p.PeriodMonth, -models.Cents(p.Amount))
 }
 
 func (h *paymentHandler) update(c *fiber.Ctx) error {
@@ -122,151 +242,148 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 	}
 	var in paymentInput
 	if err := c.BodyParser(&in); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+		return badField("body", "invalid body")
 	}
-	in.Amount = round2(in.Amount)
-	if in.Amount <= 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "amount must be positive")
-	}
-	typ := defaultStr(in.Type, models.PayOther)
-	if err := validatePeriodMonth(typ, in.PeriodMonth); err != nil {
+	prev, err := findPayment(ctx, h.store, id)
+	if err != nil {
 		return err
 	}
-	// Voided records are frozen history — corrections happen on live ones.
-	var prev models.Payment
-	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&prev); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "payment not found")
-	}
 	if prev.VoidedAt != nil {
-		return fiber.NewError(fiber.StatusConflict, "payment is voided and can no longer be edited")
+		return apiErr(http.StatusConflict, CodeVoidedLocked, "payment is voided and can no longer be edited")
 	}
-	set := bson.M{
-		"amount":      in.Amount,
-		"type":        typ,
-		"periodMonth": in.PeriodMonth,
-		"note":        in.Note,
+	locked := ""
+	if prev.SaleID != nil || prev.Type == models.PaySale {
+		locked = prev.Type
 	}
-	if in.Date != nil {
-		set["date"] = *in.Date
+	next, trainee, err := h.normalizePayment(ctx, in, locked)
+	if err != nil {
+		return err
 	}
-	// Re-resolve the trainee link (and denormalized name), or clear it.
-	if in.Trainee != "" {
-		tid, err := primitive.ObjectIDFromHex(in.Trainee)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid trainee id")
+	next.ID, next.CreatedAt, next.CreatedBy, next.SaleID = prev.ID, prev.CreatedAt, prev.CreatedBy, prev.SaleID
+	next.Date = prev.Date
+	if in.Date != nil || in.Day != "" {
+		if next.Date, err = resolveRecordDate(in.Date, in.Day); err != nil {
+			return err
 		}
-		if typ == models.PaySubscription {
-			if err := checkSubscriptionOverpay(ctx, h.store, tid, in.PeriodMonth, in.Amount, &id); err != nil {
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if models.Cents(next.Amount) != models.Cents(prev.Amount) {
+		if reason, err = requireReason(in.Reason, "change a payment's amount"); err != nil {
+			return err
+		}
+	}
+	actor := actorOf(c)
+
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		// Re-read inside the transaction: the correction applies to the
+		// payment as it is now, and conflicts with a concurrent void.
+		live, err := findPayment(tx, h.store, id)
+		if err != nil {
+			return err
+		}
+		if live.VoidedAt != nil {
+			return apiErr(http.StatusConflict, CodeVoidedLocked, "payment is voided and can no longer be edited")
+		}
+		if err := reverseFromCharge(tx, h.store, live); err != nil {
+			return err
+		}
+		if next.Type == models.PaySubscription {
+			ch, err := ensureCharge(tx, h.store, *trainee, next.PeriodMonth)
+			if err != nil {
+				return err
+			}
+			if ch == nil {
+				return explainChargeRefusal(tx, h.store, trainee.ID, next.PeriodMonth, 1)
+			}
+			if err := applyChargeDelta(tx, h.store, trainee.ID, next.PeriodMonth, models.Cents(next.Amount)); err != nil {
 				return err
 			}
 		}
-		names := traineeNames(ctx, h.store, []primitive.ObjectID{tid})
-		set["trainee"] = tid
-		set["traineeName"] = names[tid]
-	} else {
-		set["trainee"] = nil
-		set["traineeName"] = ""
-	}
-	if _, err := h.store.Coll(models.CollPayments).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
+		set := bson.M{
+			"amount": next.Amount, "type": next.Type, "periodMonth": next.PeriodMonth,
+			"note": next.Note, "date": next.Date, "trainee": next.Trainee, "traineeName": next.TraineeName,
+		}
+		res, err := h.store.Coll(models.CollPayments).UpdateOne(tx, bson.M{"_id": id, "voidedAt": nil}, bson.M{"$set": set})
+		if err != nil {
+			return err
+		}
+		if res.MatchedCount == 0 {
+			return apiErr(http.StatusConflict, CodeVoidedLocked, "payment is voided and can no longer be edited")
+		}
+		return writeAudit(tx, h.store, auditLine{Entity: "payment", Ref: id, Action: "update",
+			Before: live, After: next, Actor: actor, Reason: reason})
+	})
+	if err != nil {
 		return err
 	}
-	var p models.Payment
-	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "payment not found")
+	p, err := findPayment(ctx, h.store, id)
+	if err != nil {
+		return err
 	}
-	writeAudit(ctx, h.store, "payment", id, "update", prev, p)
 	return c.JSON(p)
 }
 
-// remove voids a payment rather than deleting it: the record stays in the
-// books forever, marked void, and stops counting toward revenue and dues.
+// voidPayment marks a payment void rather than deleting it: the record stays
+// in the books forever, stops counting toward revenue and dues, and its
+// amount comes back off the month's charge — all in one transaction.
+func voidPayment(ctx context.Context, store *db.Store, id primitive.ObjectID, reason, actor string) error {
+	return store.WithTx(ctx, func(tx context.Context) error {
+		prev, err := findPayment(tx, store, id)
+		if err != nil {
+			return err
+		}
+		if prev.VoidedAt != nil {
+			return apiErr(http.StatusConflict, CodeAlreadyVoided, "payment is already voided")
+		}
+		now := time.Now()
+		res, err := store.Coll(models.CollPayments).UpdateOne(tx, bson.M{"_id": id, "voidedAt": nil},
+			bson.M{"$set": bson.M{"voidedAt": now, "voidReason": reason, "voidedBy": actor}})
+		if err != nil {
+			return err
+		}
+		if res.MatchedCount == 0 {
+			return apiErr(http.StatusConflict, CodeAlreadyVoided, "payment is already voided")
+		}
+		if err := reverseFromCharge(tx, store, prev); err != nil {
+			return err
+		}
+		if err := failpoint("paymentVoid.afterCharge"); err != nil {
+			return err
+		}
+		after := prev
+		after.VoidedAt, after.VoidReason, after.VoidedBy = &now, reason, actor
+		return writeAudit(tx, store, auditLine{Entity: "payment", Ref: id, Action: "void",
+			Before: prev, After: after, Actor: actor, Reason: reason})
+	})
+}
+
 func (h *paymentHandler) remove(c *fiber.Ctx) error {
+	return h.doVoid(c, c.Query("reason"))
+}
+
+func (h *paymentHandler) voidPost(c *fiber.Ctx) error {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.BodyParser(&in)
+	return h.doVoid(c, in.Reason)
+}
+
+func (h *paymentHandler) doVoid(c *fiber.Ctx, rawReason string) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	id, err := objID(c)
 	if err != nil {
 		return err
 	}
-	var prev models.Payment
-	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&prev); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "payment not found")
-	}
-	if prev.VoidedAt != nil {
-		return fiber.NewError(fiber.StatusConflict, "payment is already voided")
-	}
-	now := time.Now()
-	reason := c.Query("reason")
-	if _, err := h.store.Coll(models.CollPayments).UpdateOne(ctx,
-		bson.M{"_id": id, "voidedAt": nil},
-		bson.M{"$set": bson.M{"voidedAt": now, "voidReason": reason}}); err != nil {
-		return err
-	}
-	after := prev
-	after.VoidedAt = &now
-	after.VoidReason = reason
-	writeAudit(ctx, h.store, "payment", id, "void", prev, after)
-	return c.JSON(fiber.Map{"ok": true, "voided": true})
-}
-
-// validatePeriodMonth ensures a subscription payment's period is a real YYYY-MM,
-// since the dues matcher keys on an exact string match.
-func validatePeriodMonth(typ, periodMonth string) error {
-	if typ == models.PaySubscription && periodMonth != "" {
-		if _, _, err := models.MonthRange(periodMonth); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "periodMonth must be YYYY-MM")
-		}
-	}
-	return nil
-}
-
-// checkSubscriptionOverpay rejects a subscription payment that would push a
-// trainee's total for a period past their monthly fee — overpaying dues is
-// almost always a data-entry mistake, and silently absorbing it corrupts the
-// books. exclude is the payment being edited (so updates don't count
-// themselves); nil on create. Skipped when the trainee has no monthly fee
-// (nothing is owed, so there is nothing to overpay).
-func checkSubscriptionOverpay(ctx context.Context, store *db.Store, traineeID primitive.ObjectID,
-	periodMonth string, amount float64, exclude *primitive.ObjectID) error {
-	if periodMonth == "" {
-		return nil
-	}
-	var t models.Trainee
-	if err := store.Coll(models.CollTrainees).FindOne(ctx, bson.M{"_id": traineeID}).Decode(&t); err != nil {
-		return nil // missing trainee is handled by the caller's own validation
-	}
-	if t.MonthlyFee <= 0 {
-		return nil
-	}
-	filter := notVoided(bson.M{
-		"type":        models.PaySubscription,
-		"periodMonth": periodMonth,
-		"trainee":     traineeID,
-	})
-	if exclude != nil {
-		filter["_id"] = bson.M{"$ne": *exclude}
-	}
-	cur, err := store.Coll(models.CollPayments).Find(ctx, filter)
+	reason, err := requireReason(rawReason, "void a payment")
 	if err != nil {
 		return err
 	}
-	var ps []models.Payment
-	if err := cur.All(ctx, &ps); err != nil {
+	if err := voidPayment(ctx, h.store, id, reason, actorOf(c)); err != nil {
 		return err
 	}
-	var paid float64
-	for _, p := range ps {
-		paid += p.Amount
-	}
-	remaining := t.MonthlyFee - paid
-	if remaining < 0 {
-		remaining = 0
-	}
-	if amount > remaining {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf(
-			"%s would overpay %s: fee %s, already paid %s, remaining %s",
-			fmtAmt(amount), periodMonth, fmtAmt(t.MonthlyFee), fmtAmt(paid), fmtAmt(remaining)))
-	}
-	return nil
+	return c.JSON(fiber.Map{"ok": true, "voided": true})
 }
 
 func fmtAmt(v float64) string {
@@ -280,21 +397,32 @@ func (h *paymentHandler) receipt(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var p models.Payment
-	if err := h.store.Coll(models.CollPayments).FindOne(ctx, bson.M{"_id": id}).Decode(&p); err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "payment not found")
+	p, err := findPayment(ctx, h.store, id)
+	if err != nil {
+		return err
 	}
-	return c.JSON(fiber.Map{
+	out := fiber.Map{
 		"studio":  "Bronze Boxing",
 		"payment": p,
 		"issued":  time.Now().UTC(),
-	})
+		"void":    p.VoidedAt != nil,
+	}
+	if p.Type == models.PaySubscription && p.Trainee != nil && p.PeriodMonth != "" {
+		var ch models.SubscriptionCharge
+		if err := h.store.Coll(models.CollCharges).FindOne(ctx, chargeKey(*p.Trainee, p.PeriodMonth)).Decode(&ch); err == nil {
+			out["charge"] = viewCharge(ch)
+		}
+	}
+	return c.JSON(out)
 }
 
 func (h *paymentHandler) export(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
-	from, to := monthOrRange(c)
+	from, to, err := monthOrRange(c)
+	if err != nil {
+		return err
+	}
 	cur, err := h.store.Coll(models.CollPayments).Find(ctx,
 		bson.M{"date": bson.M{"$gte": from, "$lt": to}},
 		options.Find().SetSort(bson.D{{Key: "date", Value: 1}}))
@@ -307,33 +435,27 @@ func (h *paymentHandler) export(c *fiber.Ctx) error {
 	}
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Note", "Status"})
+	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Note", "Status", "Void reason"})
 	for _, p := range payments {
 		status := ""
 		if p.VoidedAt != nil {
 			status = "VOID"
 		}
 		_ = w.Write([]string{
-			p.Date.Format("2006-01-02"),
+			models.DateKey(p.Date),
 			p.TraineeName,
 			p.Type,
 			p.PeriodMonth,
 			strconv.FormatFloat(p.Amount, 'f', 2, 64),
 			p.Note,
 			status,
+			p.VoidReason,
 		})
 	}
 	w.Flush()
 	c.Set("Content-Type", "text/csv")
-	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=payments-%s.csv", time.Now().Format("2006-01-02")))
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=payments-%s.csv", models.DateKey(time.Now())))
 	return c.Send(buf.Bytes())
-}
-
-type subStatus struct {
-	Trainee    models.Trainee `json:"trainee"`
-	Due        float64        `json:"due"`
-	AmountPaid float64        `json:"amountPaid"`
-	State      string         `json:"state"` // paid | partial | unpaid
 }
 
 func (h *paymentHandler) subscriptions(c *fiber.Ctx) error {
@@ -343,14 +465,86 @@ func (h *paymentHandler) subscriptions(c *fiber.Ctx) error {
 	if month == "" {
 		month = models.MonthKey(time.Now())
 	}
-	statuses, err := computeSubStatuses(ctx, h.store, month)
+	if !models.ValidMonth(month) {
+		return badField("m", "m must be YYYY-MM")
+	}
+	rows, err := listDues(ctx, h.store, month)
 	if err != nil {
 		return err
 	}
-	return c.JSON(statuses)
+	return c.JSON(rows)
 }
 
-// computeMonthRevenue sums all payments dated within the given YYYY-MM month.
+// charges lists stored charges, e.g. one trainee's dues history
+// (?trainee=ID) newest month first.
+func (h *paymentHandler) charges(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	filter := bson.M{}
+	if t := c.Query("trainee"); t != "" {
+		tid, err := parseOID(t, "trainee")
+		if err != nil {
+			return err
+		}
+		filter["trainee"] = tid
+	}
+	if s := c.Query("state"); s != "" {
+		filter["state"] = s
+	}
+	cur, err := h.store.Coll(models.CollCharges).Find(ctx, filter,
+		options.Find().SetSort(bson.D{{Key: "periodMonth", Value: -1}}).SetLimit(int64(min(max(atoiDefault(c.Query("limit"), 120), 1), 500))))
+	if err != nil {
+		return err
+	}
+	var rows []models.SubscriptionCharge
+	if err := cur.All(ctx, &rows); err != nil {
+		return err
+	}
+	out := make([]chargeView, len(rows))
+	for i, r := range rows {
+		out[i] = viewCharge(r)
+	}
+	return c.JSON(out)
+}
+
+func (h *paymentHandler) adjust(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		Due    *float64 `json:"due"`
+		Reason string   `json:"reason"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return badField("body", "invalid body")
+	}
+	if in.Due == nil {
+		return badField("due", "due is required")
+	}
+	due, err := validMoney("due", *in.Due, true)
+	if err != nil {
+		return err
+	}
+	reason, err := requireReason(in.Reason, "adjust a month's dues")
+	if err != nil {
+		return err
+	}
+	var out *models.SubscriptionCharge
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		ch, err := adjustCharge(tx, h.store, id, models.Cents(due), reason, actorOf(c))
+		out = ch
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return c.JSON(viewCharge(*out))
+}
+
+// computeMonthRevenue sums all live payments dated within the given month.
 func computeMonthRevenue(ctx context.Context, store *db.Store, month string) (float64, error) {
 	start, end, err := models.MonthRange(month)
 	if err != nil {
@@ -364,56 +558,9 @@ func computeMonthRevenue(ctx context.Context, store *db.Store, month string) (fl
 	if err := cur.All(ctx, &ps); err != nil {
 		return 0, err
 	}
-	var total float64
+	var total int64
 	for _, p := range ps {
-		total += p.Amount
+		total += models.Cents(p.Amount)
 	}
-	return round2(total), nil
-}
-
-// computeSubStatuses builds per-trainee subscription dues/paid/state for a month.
-func computeSubStatuses(ctx context.Context, store *db.Store, month string) ([]subStatus, error) {
-	cur, err := store.Coll(models.CollTrainees).Find(ctx, bson.M{
-		"status":     models.StatusActive,
-		"monthlyFee": bson.M{"$gt": 0},
-	}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
-	if err != nil {
-		return nil, err
-	}
-	var trainees []models.Trainee
-	if err := cur.All(ctx, &trainees); err != nil {
-		return nil, err
-	}
-
-	// Sum subscription payments for this period, by trainee (live ones only).
-	pcur, err := store.Coll(models.CollPayments).Find(ctx, notVoided(bson.M{
-		"type":        models.PaySubscription,
-		"periodMonth": month,
-	}))
-	if err != nil {
-		return nil, err
-	}
-	var pays []models.Payment
-	if err := pcur.All(ctx, &pays); err != nil {
-		return nil, err
-	}
-	paid := map[primitive.ObjectID]float64{}
-	for _, p := range pays {
-		if p.Trainee != nil {
-			paid[*p.Trainee] += p.Amount
-		}
-	}
-
-	out := make([]subStatus, 0, len(trainees))
-	for _, t := range trainees {
-		amt := paid[t.ID]
-		state := "unpaid"
-		if amt >= t.MonthlyFee && t.MonthlyFee > 0 {
-			state = "paid"
-		} else if amt > 0 {
-			state = "partial"
-		}
-		out = append(out, subStatus{Trainee: t, Due: t.MonthlyFee, AmountPaid: amt, State: state})
-	}
-	return out, nil
+	return models.Amount(total), nil
 }

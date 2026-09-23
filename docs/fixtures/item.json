@@ -1,0 +1,12 @@
+{
+  "active": true,
+  "costPrice": 4,
+  "createdAt": "<timestamp>",
+  "id": "<id>",
+  "lowStockThreshold": 6,
+  "name": "Hand Wraps",
+  "price": 8,
+  "sku": "WRAP-45",
+  "stock": 24,
+  "updatedAt": "<timestamp>"
+}

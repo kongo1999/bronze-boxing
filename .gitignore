@@ -21,3 +21,6 @@ Thumbs.db
 
 # Local test / tooling artifacts
 .playwright-mcp/
+
+# Local database backups
+/backups/

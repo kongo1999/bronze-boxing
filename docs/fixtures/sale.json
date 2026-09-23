@@ -1,0 +1,15 @@
+{
+  "createdAt": "<timestamp>",
+  "createdBy": "local",
+  "date": "<timestamp>",
+  "id": "<id>",
+  "item": "<id>",
+  "itemName": "Hand Wraps",
+  "listPrice": 8,
+  "qty": 2,
+  "total": 16,
+  "trainee": "<id>",
+  "traineeName": "Karim Haddad",
+  "unitCost": 4,
+  "unitPrice": 8
+}

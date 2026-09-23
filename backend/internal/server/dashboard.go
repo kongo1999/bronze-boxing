@@ -18,7 +18,7 @@ func registerDashboard(r fiber.Router, store *db.Store) {
 
 		now := time.Now()
 		month := models.MonthKey(now)
-		startDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+		startDay := models.StartOfDay(now)
 		endDay := startDay.AddDate(0, 0, 1)
 		weekEnd := startDay.AddDate(0, 0, 7)
 
@@ -54,15 +54,26 @@ func registerDashboard(r fiber.Router, store *db.Store) {
 		if err != nil {
 			return err
 		}
-		subs, err := computeSubStatuses(ctx, store, month)
+		dues, err := listDues(ctx, store, month)
 		if err != nil {
 			return err
 		}
-		overdue := []subStatus{}
-		for _, s := range subs {
-			if s.State != "paid" {
-				overdue = append(overdue, s)
+		// Partial and unpaid are counted separately — a partial account is
+		// neither paid nor untouched. Unverified rows stay out of both.
+		overdue := []subRow{}
+		var partial, unpaid int
+		var outstanding float64
+		for _, s := range dues {
+			switch s.State {
+			case models.ChargePartial:
+				partial++
+			case models.ChargeUnpaid:
+				unpaid++
+			default:
+				continue
 			}
+			outstanding += s.Remaining
+			overdue = append(overdue, s)
 		}
 
 		return c.JSON(fiber.Map{
@@ -71,6 +82,9 @@ func registerDashboard(r fiber.Router, store *db.Store) {
 			"monthRevenue":         monthRevenue,
 			"activeTrainees":       activeTrainees,
 			"overdueCount":         len(overdue),
+			"partialCount":         partial,
+			"unpaidCount":          unpaid,
+			"outstanding":          round2(outstanding),
 			"todaySessions":        todaySessions,
 			"weekReminders":        weekReminders,
 			"overdueSubscriptions": overdue,

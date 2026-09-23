@@ -23,6 +23,9 @@ import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
+import { STATE_LABEL, STATE_TONE, byUrgency, collectable, collectLink, countDues } from "@/lib/dues";
+import { errMsg } from "@/lib/api";
 
 const month = ref(monthKey());
 const subs = ref<SubStatus[]>([]);
@@ -67,10 +70,17 @@ function showCached(): boolean {
 watch(month, () => { loading.value = !showCached(); load(); }, { immediate: true });
 
 const revenue = computed(() => payments.value.filter((p) => !p.voidedAt).reduce((s, p) => s + p.amount, 0));
-const paidCount = computed(() => subs.value.filter((s) => s.state === "paid").length);
-
-const toneMap: Record<string, "paid" | "partial" | "overdue"> = { paid: "paid", partial: "partial", unpaid: "overdue" };
-const labelMap: Record<string, string> = { paid: "Paid", partial: "Partial", unpaid: "Unpaid" };
+// Fully paid, partial and unpaid are counted separately — a partial account
+// is neither paid nor untouched.
+const counts = computed(() => countDues(subs.value));
+const duesSub = computed(() => {
+  const c = counts.value;
+  const parts = [];
+  if (c.partial) parts.push(`${c.partial} partial`);
+  if (c.unpaid) parts.push(`${c.unpaid} unpaid`);
+  if (c.unverified) parts.push(`${c.unverified} to review`);
+  return parts.length ? parts.join(" · ") : "all paid";
+});
 const typeLabel: Record<string, string> = { subscription: "Subscription", private: "Private session", dropin: "Drop-in", sale: "Shop sale", other: "Other" };
 
 // One search box over the whole month: it narrows the dues roster and the
@@ -79,7 +89,9 @@ const typeLabel: Record<string, string> = { subscription: "Subscription", privat
 const q = ref("");
 const term = computed(() => q.value.trim().toLowerCase());
 const filteredSubs = computed(() =>
-  term.value ? subs.value.filter((s) => s.trainee.name.toLowerCase().includes(term.value)) : subs.value,
+  (term.value ? subs.value.filter((s) => s.trainee.name.toLowerCase().includes(term.value)) : subs.value)
+    .slice()
+    .sort(byUrgency),
 );
 const filteredPayments = computed(() => {
   if (!term.value) return payments.value;
@@ -106,15 +118,21 @@ const traineeOptions = computed(() => {
 
 // Voids, not deletes: the record stays in the books marked VOID and stops
 // counting toward revenue and dues.
-async function voidPayment(id: string) {
-  if (!confirm("Void this payment? It stays in the books marked VOID and stops counting.")) return;
+async function voidPayment(p: Payment) {
+  const reason = await askReason({
+    title: "Void this payment?",
+    message: `${money(p.amount)} from ${p.traineeName || "—"} stays in the books marked VOID and stops counting toward revenue and dues.`,
+    confirmLabel: "Void payment",
+    suggestions: VOID_REASONS,
+  });
+  if (reason === null) return;
   try {
-    await api.del(`/payments/${id}`);
+    await api.post(`/payments/${p.id}/void`, { reason });
     clearCache(); // trainee pages hold their own copy of the payment list
     load();
     toast("Payment voided.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't void payment.", "error");
+    toast(errMsg(e, "Couldn't void payment."), "error");
   }
 }
 
@@ -129,6 +147,20 @@ function openEdit(p: Payment) {
 }
 async function saveEdit(id: string) {
   if (savingEdit.value || editForm.amount <= 0) return;
+  // Changing an amount is a correction of the books: say why.
+  const original = payments.value.find((p) => p.id === id);
+  let reason = "";
+  if (original && Math.round(original.amount * 100) !== Math.round(editForm.amount * 100)) {
+    const r = await askReason({
+      title: "Correct the amount?",
+      message: `${money(original.amount)} → ${money(editForm.amount)}. The change is kept in this payment's history.`,
+      confirmLabel: "Save correction",
+      tone: "primary",
+      suggestions: CORRECTION_REASONS,
+    });
+    if (r === null) return;
+    reason = r;
+  }
   savingEdit.value = true;
   try {
     await api.put(`/payments/${id}`, {
@@ -137,13 +169,14 @@ async function saveEdit(id: string) {
       periodMonth: editForm.type === "subscription" ? editForm.periodMonth : "",
       note: editForm.note,
       trainee: editForm.trainee || "",
+      reason,
     });
     editingId.value = null;
     clearCache();
     await load();
     toast("Payment updated.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't update payment.", "error");
+    toast(errMsg(e, "Couldn't update payment."), "error");
   } finally {
     savingEdit.value = false;
   }
@@ -188,7 +221,7 @@ async function exportCsv() {
     <template v-else>
       <div class="grid grid-cols-2 gap-3">
         <StatTile label="Collected" :value="money(revenue)" sub="fees this month" accent />
-        <StatTile label="Subscriptions" :value="`${paidCount}/${subs.length}`" :sub="subs.length - paidCount > 0 ? `${subs.length - paidCount} unpaid` : 'all paid'" />
+        <StatTile label="Fully paid" :value="`${counts.paid}/${subs.length}`" :sub="duesSub" />
       </div>
 
       <SearchInput v-model="q" placeholder="Search a name, note or type…" />
@@ -205,14 +238,16 @@ async function exportCsv() {
                 <Avatar :name="s.trainee.name" class="h-8 w-8 text-xs" />
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">{{ s.trainee.name }}</p>
-                  <p class="text-xs text-faint tnum">{{ money(s.amountPaid) }} / {{ money(s.due) }}</p>
+                  <p class="text-xs text-faint tnum">
+                    {{ money(s.amountPaid) }} / {{ money(s.due) }}<template v-if="s.state === 'partial' || s.state === 'unpaid'"> · <span class="text-muted">{{ money(s.remaining) }} left</span></template>
+                  </p>
                 </div>
               </RouterLink>
               <div class="flex shrink-0 items-center gap-2">
-                <Badge :tone="toneMap[s.state]">{{ labelMap[s.state] }}</Badge>
+                <Badge :tone="STATE_TONE[s.state]">{{ STATE_LABEL[s.state] }}</Badge>
                 <RouterLink
-                  v-if="s.state !== 'paid'"
-                  :to="`/payments/new?trainee=${s.trainee.id}&type=subscription&periodMonth=${month}&amount=${s.due - s.amountPaid}`"
+                  v-if="collectable(s)"
+                  :to="collectLink(s)"
                   :class="btnClasses('primary', 'sm')"
                 >Collect</RouterLink>
               </div>
@@ -248,7 +283,7 @@ async function exportCsv() {
                   <span class="font-display text-sm tnum" :class="p.voidedAt ? 'line-through text-faint' : ''">{{ money(p.amount) }}</span>
                   <template v-if="!p.voidedAt">
                     <button class="grid h-7 w-7 place-items-center rounded-lg text-purple transition-colors hover:bg-purple/10" aria-label="Edit payment" @click="openEdit(p)"><Pencil class="h-4 w-4" /></button>
-                    <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void payment" @click="voidPayment(p.id)">×</button>
+                    <button class="grid h-7 w-7 place-items-center rounded-lg text-lg leading-none text-faint transition-colors hover:bg-overdue/10 hover:text-overdue" aria-label="Void payment" @click="voidPayment(p)">×</button>
                   </template>
                 </div>
               </div>

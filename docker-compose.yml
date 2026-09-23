@@ -8,6 +8,9 @@
 #
 #   cp .env.example .env   # then edit
 #   docker compose up -d --build
+#
+# Upgrading an existing droplet: back up first, then run the migrations — see
+# DEPLOY.md ("Updating after a code change").
 
 services:
   mongo:
@@ -16,15 +19,40 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    # A single-node replica set: MongoDB only runs multi-document
+    # transactions (which every money and stock change uses) on a replica
+    # set. With auth on, replica-set members must also share a keyfile; it is
+    # generated once into its own volume. The official entrypoint drops
+    # --replSet/--keyFile while it creates the root user on first boot.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        if [ ! -s /keyfile/mongo.key ]; then
+          openssl rand -base64 756 > /keyfile/mongo.key
+        fi
+        chown 999:999 /keyfile/mongo.key
+        chmod 400 /keyfile/mongo.key
+        exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /keyfile/mongo.key
     volumes:
       - mongo_data:/data/db
+      - mongo_keyfile:/keyfile
     networks: [internal]
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      # Initiates the replica set on first run (idempotent afterwards), then
+      # reports healthy only once this node is the writable primary.
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin --eval "
+          try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }).ok };
+          if (!db.hello().isWritablePrimary) { quit(1) }"
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
 
   api:
     build:
@@ -32,12 +60,31 @@ services:
       target: api
     restart: unless-stopped
     environment:
-      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin&replicaSet=rs0
       DB_NAME: ${DB_NAME}
       PORT: "8080"
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      STUDIO_TZ: ${STUDIO_TZ:-Asia/Beirut}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks: [internal]
+
+  # Data migrations. NOT started by `up`: run explicitly after a backup —
+  #   docker compose run --rm migrate -dry-run
+  #   docker compose run --rm migrate
+  # The API refuses to start while migrations are pending.
+  migrate:
+    build:
+      context: ./backend
+      target: migrate
+    profiles: [ops]
+    restart: "no"
+    environment:
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin&replicaSet=rs0
+      DB_NAME: ${DB_NAME}
       STUDIO_TZ: ${STUDIO_TZ:-Asia/Beirut}
     depends_on:
       mongo:
@@ -53,8 +100,9 @@ services:
     profiles: [seed]
     restart: "no"
     environment:
-      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin&replicaSet=rs0
       DB_NAME: ${DB_NAME}
+      STUDIO_TZ: ${STUDIO_TZ:-Asia/Beirut}
     depends_on:
       mongo:
         condition: service_healthy
@@ -80,6 +128,7 @@ services:
 
 volumes:
   mongo_data:
+  mongo_keyfile:
   caddy_data:
   caddy_config:
 

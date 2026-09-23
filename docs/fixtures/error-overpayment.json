@@ -1,0 +1,10 @@
+{
+  "code": "OVERPAYMENT",
+  "details": {
+    "due": 50,
+    "paid": 20,
+    "remaining": 30
+  },
+  "error": "100 would overpay 2026-09: due 50, already paid 20, remaining 30",
+  "field": "amount"
+}

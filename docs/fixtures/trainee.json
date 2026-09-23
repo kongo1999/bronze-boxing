@@ -1,0 +1,11 @@
+{
+  "createdAt": "<timestamp>",
+  "feeFromMonth": "<YYYY-MM>",
+  "id": "<id>",
+  "monthlyFee": 50,
+  "name": "Karim Haddad",
+  "phone": "03 111 222",
+  "skillLevel": "intermediate",
+  "status": "active",
+  "updatedAt": "<timestamp>"
+}

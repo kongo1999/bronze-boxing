@@ -1,11 +1,16 @@
 const CURRENCY = (import.meta.env.VITE_CURRENCY as string) || "$";
 
+// Whole amounts read as "$12"; anything with cents shows both digits ("$12.50",
+// "$12.55") — the books are kept to the cent, so the screen must be too.
 export function money(n: number): string {
+  const v = Math.round((n ?? 0) * 100) / 100;
+  const cents = Math.round(Math.abs(v) * 100) % 100 !== 0;
   return (
+    (v < 0 ? "−" : "") +
     CURRENCY +
-    (n ?? 0).toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
+    Math.abs(v).toLocaleString("en-US", {
+      minimumFractionDigits: cents ? 2 : 0,
+      maximumFractionDigits: 2,
     })
   );
 }

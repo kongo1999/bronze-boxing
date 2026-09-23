@@ -13,6 +13,14 @@ type Config struct {
 	AdminUsername string
 	AdminPassword string
 	Timezone      string
+	// AllowStandalone runs against a non-replica-set MongoDB without
+	// transactions. Emergencies only: multi-document money and stock changes
+	// lose their all-or-nothing guarantee.
+	AllowStandalone bool
+	// SkipMigrationCheck starts the API even with pending migrations.
+	SkipMigrationCheck bool
+	// Quiet disables per-request logging (tests).
+	Quiet bool
 }
 
 func Load() Config {
@@ -28,7 +36,9 @@ func Load() Config {
 		AdminPassword: env("ADMIN_PASSWORD", ""),
 		// The studio's wall-clock timezone: month boundaries for revenue,
 		// dues and statements are computed in THIS zone, not the server's.
-		Timezone: env("STUDIO_TZ", "Asia/Beirut"),
+		Timezone:           env("STUDIO_TZ", "Asia/Beirut"),
+		AllowStandalone:    env("MONGO_ALLOW_STANDALONE", "") == "true",
+		SkipMigrationCheck: env("SKIP_MIGRATION_CHECK", "") == "true",
 	}
 }
 

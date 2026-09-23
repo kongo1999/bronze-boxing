@@ -2,6 +2,7 @@
 import { useRoute } from "vue-router";
 import AppShell from "@/components/shell/AppShell.vue";
 import ToastHost from "@/components/ui/ToastHost.vue";
+import PromptHost from "@/components/ui/PromptHost.vue";
 
 // The login gate renders bare (no nav shell); everything else gets the shell.
 const route = useRoute();
@@ -17,4 +18,5 @@ const route = useRoute();
     </router-view>
   </AppShell>
   <ToastHost />
+  <PromptHost />
 </template>

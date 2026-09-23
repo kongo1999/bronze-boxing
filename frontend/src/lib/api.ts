@@ -5,6 +5,35 @@ import { markLoggedOut } from "./auth";
 
 const BASE = "/api";
 
+/**
+ * An error the API returned. `code` is stable and machine-readable
+ * (e.g. OVERPAYMENT, INSUFFICIENT_STOCK, REASON_REQUIRED, SCHEDULE_CONFLICT);
+ * `field` names the input it concerns, so forms can show the message beside
+ * the right field; `details` carries structured extras (remaining balance,
+ * conflicting dates, the existing record being duplicated…).
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string,
+    public field?: string,
+    public details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function isApiError(e: unknown, code?: string): e is ApiError {
+  return e instanceof ApiError && (code === undefined || e.code === code);
+}
+
+/** Human message for any thrown value. */
+export function errMsg(e: unknown, fallback = "Something went wrong"): string {
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   // Demo mode (e.g. Vercel preview with no backend): serve canned data.
   if (isDemo) {
@@ -26,17 +55,23 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
     if (!window.location.pathname.startsWith("/login")) {
       window.location.assign("/login");
     }
-    throw new Error("Signed out — please sign in again.");
+    throw new ApiError("Signed out — please sign in again.", 401, "UNAUTHORIZED");
   }
   if (!res.ok) {
-    let msg = res.statusText;
+    let msg = res.statusText || `Request failed (${res.status})`;
+    let code: string | undefined;
+    let field: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
       const j = await res.json();
       if (j?.error) msg = j.error;
+      code = j?.code;
+      field = j?.field;
+      details = j?.details;
     } catch {
       /* ignore */
     }
-    throw new Error(msg);
+    throw new ApiError(msg, res.status, code, field, details);
   }
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") || "";
@@ -44,7 +79,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   // (transparent ISP cache, captive portal, misrouted proxy). Returning it as
   // data silently corrupts forms that prefill from it — fail loudly instead.
   if (ct.includes("text/html")) {
-    throw new Error("Unexpected response from the server — check the connection and retry.");
+    throw new ApiError("Unexpected response from the server — check the connection and retry.", res.status, "BAD_RESPONSE");
   }
   if (!ct.includes("application/json")) {
     return (await res.text()) as unknown as T;

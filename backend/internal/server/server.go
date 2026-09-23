@@ -18,9 +18,11 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	})
 
 	app.Use(recover.New())
-	app.Use(logger.New(logger.Config{
-		Format: "${time} ${status} ${method} ${path} (${latency})\n",
-	}))
+	if !cfg.Quiet {
+		app.Use(logger.New(logger.Config{
+			Format: "${time} ${status} ${method} ${path} (${latency})\n",
+		}))
+	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.CORSOrigins,
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -49,13 +51,4 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	registerAudit(api, store)
 
 	return app
-}
-
-// errorHandler renders all errors as JSON: { "error": "..." }.
-func errorHandler(c *fiber.Ctx, err error) error {
-	code := fiber.StatusInternalServerError
-	if e, ok := err.(*fiber.Error); ok {
-		code = e.Code
-	}
-	return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 }

@@ -1,0 +1,42 @@
+# Disposable MongoDB for local integration tests and CI.
+#
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   cd backend && TEST_MONGODB_URI="mongodb://localhost:27027/?replicaSet=rs0" go test ./...
+#
+# A single-node replica set (transactions need one) on its own port, with its
+# data on tmpfs: nothing survives `down`, and it never shares a volume, port or
+# name with the real stack in docker-compose.yml. Tests create a uniquely named
+# database per test and drop only that database afterwards.
+#
+# mongod listens on 27027 *inside* the container too, so the replica-set member
+# address (localhost:27027) resolves identically from the host and the container.
+name: bronze-test
+
+services:
+  mongo-test:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--port", "27027", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:27027:27027"
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    healthcheck:
+      # Initiates the replica set on first run, then reports healthy once this
+      # node is primary (transactions are only accepted by a primary).
+      test:
+        - CMD
+        - mongosh
+        - --port
+        - "27027"
+        - --quiet
+        - --eval
+        - >-
+          try { rs.status().ok } catch (e) {
+            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27027' }] }).ok
+          };
+          if (!db.hello().isWritablePrimary) { quit(1) }
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s

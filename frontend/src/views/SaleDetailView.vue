@@ -14,6 +14,8 @@ import SearchSelect from "@/components/ui/SearchSelect.vue";
 import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
+import { errMsg } from "@/lib/api";
 
 const route = useRoute();
 const id = route.params.id as string;
@@ -37,15 +39,27 @@ function startEdit() {
 const newTotal = computed(() => (sale.value ? sale.value.unitPrice * (form.qty || 0) : 0));
 async function save() {
   if (saving.value || !sale.value || form.qty <= 0) return;
+  let reason = "";
+  if (form.qty !== sale.value.qty) {
+    const r = await askReason({
+      title: "Correct the quantity?",
+      message: `${sale.value.qty} → ${form.qty} × ${sale.value.itemName}. Stock moves by the difference and the change is kept in the sale's history.`,
+      confirmLabel: "Save correction",
+      tone: "primary",
+      suggestions: CORRECTION_REASONS,
+    });
+    if (r === null) return;
+    reason = r;
+  }
   saving.value = true;
   try {
-    await api.put(`/sales/${id}`, { qty: form.qty, trainee: form.trainee || "" });
+    await api.put(`/sales/${id}`, { qty: form.qty, trainee: form.trainee || "", reason });
     editing.value = false;
     clearCache(); // stock and the sales list on the Inventory page both moved
     await reload();
     toast("Sale updated.", "success");
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't update sale.", "error");
+    toast(errMsg(e, "Couldn't update sale."), "error");
   } finally {
     saving.value = false;
   }
@@ -55,15 +69,21 @@ async function save() {
 const voiding = ref(false);
 async function voidSale() {
   if (voiding.value || !sale.value) return;
-  if (!confirm(`Void this sale? ${sale.value.qty} × ${sale.value.itemName} goes back in stock and the sale stays in the books marked VOID.`)) return;
+  const reason = await askReason({
+    title: "Void this sale?",
+    message: `${sale.value.qty - (sale.value.returnedQty ?? 0)} × ${sale.value.itemName} goes back in stock and the sale stays in the books marked VOID.`,
+    confirmLabel: "Void sale",
+    suggestions: VOID_REASONS,
+  });
+  if (reason === null) return;
   voiding.value = true;
   try {
-    await api.del(`/sales/${id}`);
+    await api.post(`/sales/${id}/void`, { reason });
     toast("Sale voided and restocked.", "success");
     clearCache();
     await reload();
   } catch (e) {
-    toast(e instanceof Error && e.message ? e.message : "Couldn't void sale.", "error");
+    toast(errMsg(e, "Couldn't void sale."), "error");
   } finally {
     voiding.value = false;
   }

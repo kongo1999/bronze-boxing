@@ -1,0 +1,25 @@
+[
+  {
+    "actor": "local",
+    "at": "<timestamp>",
+    "delta": -2,
+    "id": "<id>",
+    "item": "<id>",
+    "itemName": "Hand Wraps",
+    "kind": "sale",
+    "ref": "<id>",
+    "refType": "sale",
+    "stockAfter": 22
+  },
+  {
+    "actor": "local",
+    "at": "<timestamp>",
+    "delta": 24,
+    "id": "<id>",
+    "item": "<id>",
+    "itemName": "Hand Wraps",
+    "kind": "opening",
+    "reason": "Opening stock",
+    "stockAfter": 24
+  }
+]

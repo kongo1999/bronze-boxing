@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // embed zoneinfo so STUDIO_TZ resolves inside distroless
@@ -13,6 +14,7 @@ import (
 
 	"bronzeboxing/internal/config"
 	"bronzeboxing/internal/db"
+	"bronzeboxing/internal/migrate"
 	"bronzeboxing/internal/server"
 )
 
@@ -36,7 +38,41 @@ func main() {
 	if err != nil {
 		log.Fatalf("mongo connect failed: %v", err)
 	}
-	log.Printf("connected to MongoDB (%s/%s)", cfg.MongoURI, cfg.DBName)
+	log.Printf("connected to MongoDB (db %s, transactions %v)", cfg.DBName, store.SupportsTx)
+
+	// Money and stock changes are multi-document transactions; a standalone
+	// mongod can't run them. Refuse to start rather than write half-changes.
+	if !store.SupportsTx {
+		if !cfg.AllowStandalone {
+			log.Fatal("MongoDB is not a replica set, so transactions are unavailable. " +
+				"Run it as a single-node replica set (see DEPLOY.md / README.md), " +
+				"or set MONGO_ALLOW_STANDALONE=true to run degraded in an emergency.")
+		}
+		db.AllowDegraded = true
+		log.Println("WARNING: MONGO_ALLOW_STANDALONE=true — money/stock changes are NOT atomic")
+	}
+
+	// Schema/data migrations run explicitly (cmd/migrate), never implicitly.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		pending, err := migrate.Pending(ctx, store, server.Migrations())
+		cancel()
+		if err != nil {
+			log.Fatalf("migration check failed: %v", err)
+		}
+		if len(pending) > 0 {
+			ids := make([]string, len(pending))
+			for i, m := range pending {
+				ids[i] = m.ID
+			}
+			msg := "pending migrations: " + strings.Join(ids, ", ") +
+				" — back up, then run `go run ./cmd/migrate` (or `docker compose run --rm migrate`)"
+			if !cfg.SkipMigrationCheck {
+				log.Fatal(msg)
+			}
+			log.Println("WARNING: " + msg)
+		}
+	}
 
 	// Auth indexes + admin account bootstrap (synced from ADMIN_USERNAME /
 	// ADMIN_PASSWORD; password rotation revokes that account's sessions).
