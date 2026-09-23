@@ -3,7 +3,7 @@ import { ref, reactive, computed } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Undo2 } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync, clearCache } from "@/lib/cache";
+import { useCachedAsync, invalidate } from "@/lib/cache";
 import type { Sale, Trainee } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
@@ -55,7 +55,7 @@ async function save() {
   try {
     await api.put(`/sales/${id}`, { qty: form.qty, trainee: form.trainee || "", reason });
     editing.value = false;
-    clearCache(); // stock and the sales list on the Inventory page both moved
+    invalidate("inventory", "sales", "financials"); // stock and the sales list both moved
     await reload();
     toast("Sale updated.", "success");
   } catch (e) {
@@ -80,7 +80,7 @@ async function voidSale() {
   try {
     await api.post(`/sales/${id}/void`, { reason });
     toast("Sale voided and restocked.", "success");
-    clearCache();
+    invalidate("inventory", "sales", "financials");
     await reload();
   } catch (e) {
     toast(errMsg(e, "Couldn't void sale."), "error");

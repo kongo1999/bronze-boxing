@@ -8,6 +8,7 @@
 // shows when auth is actually on — local dev and demo mode never see it.
 
 import { isDemo } from "./demo";
+import { setStudioTZ } from "./studio";
 
 // Whether the API requires a login. Probed once per page load via the public
 // /api/health endpoint; fail-open so a flaky probe can't lock the UI out of a
@@ -20,6 +21,7 @@ export async function authRequired(): Promise<boolean> {
       const res = await fetch("/api/health");
       const j = await res.json();
       required = j?.authRequired === true;
+      setStudioTZ(j?.timezone);
     } catch {
       required = false;
     }

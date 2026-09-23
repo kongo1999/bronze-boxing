@@ -3,7 +3,7 @@ import { ref, reactive, computed } from "vue";
 import { RouterLink } from "vue-router";
 import { Plus, Package, Pencil, Trash2 } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { readCache, writeCache, clearCache } from "@/lib/cache";
+import { readCache, writeCache, invalidate } from "@/lib/cache";
 import { usePaged } from "@/lib/paginate";
 import type { InventoryItem, Trainee, Sale } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
@@ -167,7 +167,7 @@ async function saveEdit(i: InventoryItem) {
       reason,
     });
     editFor.value = null;
-    clearCache();
+    invalidate("inventory", "sales", "financials");
     await load();
     toast("Item updated.", "success");
   } catch (e) {
@@ -187,7 +187,7 @@ async function removeItem(i: InventoryItem) {
   deletingId.value = i.id;
   try {
     await api.del(`/inventory/${i.id}`);
-    clearCache();
+    invalidate("inventory", "sales", "financials");
     await load();
     toast("Item deleted.", "success");
   } catch (e) {
@@ -212,7 +212,7 @@ async function confirmSell(item: InventoryItem) {
       trainee: sell.trainee || undefined,
     });
     sellFor.value = null;
-    clearCache();
+    invalidate("inventory", "sales", "financials");
     await load();
     toast(`Sold ${qty} × ${item.name}.`, "success");
   } catch (e) {

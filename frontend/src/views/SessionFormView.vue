@@ -2,8 +2,8 @@
 import { reactive, ref, computed, onMounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Users, User, Search, Check } from "lucide-vue-next";
-import { api } from "@/lib/api";
-import { clearCache } from "@/lib/cache";
+import { api, errMsg } from "@/lib/api";
+import { invalidate } from "@/lib/cache";
 import type { Session, Trainee, AttendanceStatus, SessionStatus } from "@/lib/types";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
@@ -14,6 +14,8 @@ import DateWheel from "@/components/ui/DateWheel.vue";
 import TimeWheel from "@/components/ui/TimeWheel.vue";
 import { inputCls } from "@/lib/ui";
 import { dateKey } from "@/lib/format";
+import { dayOf, timeOf, studioInstant, isDayKey } from "@/lib/studio";
+import { backTarget } from "@/lib/route-state";
 import { toast } from "@/lib/toast";
 
 const route = useRoute();
@@ -32,11 +34,15 @@ const error = ref<string>();
 const recurring = ref(false);
 const search = ref("");
 
+// A new session opens on the day it was started from (?day=), at ?time= if
+// given. Dates are studio days; times are the studio's wall clock.
+const prefillDay = isDayKey(route.query.day) ? route.query.day : "";
+const prefillTime = typeof route.query.time === "string" && /^\d{2}:\d{2}$/.test(route.query.time) ? route.query.time : "18:00";
 const form = reactive({
   title: "",
   type: "group" as "group" | "private",
-  date: "",
-  time: "18:00",
+  date: prefillDay,
+  time: prefillTime,
   durationMin: 60,
   location: "",
   status: "scheduled" as SessionStatus,
@@ -63,12 +69,11 @@ onMounted(async () => {
     trainees.value = all.filter((t) => t.status === "active" || keep.has(t.id));
 
     if (existing) {
-      const start = new Date(existing.start);
       Object.assign(form, {
         title: existing.title,
         type: existing.type,
-        date: dateKey(start),
-        time: `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`,
+        date: dayOf(existing.start),
+        time: timeOf(existing.start),
         durationMin: existing.durationMin,
         location: existing.location ?? "",
         status: existing.status,
@@ -77,7 +82,7 @@ onMounted(async () => {
       for (const a of existing.attendees) priorStatus.set(a.trainee, a.status);
     }
   } catch (e) {
-    error.value = e instanceof Error && e.message ? e.message : "Couldn't load this session.";
+    error.value = errMsg(e, "Couldn't load this session.");
   } finally {
     loading.value = false;
   }
@@ -118,7 +123,7 @@ function toggleDay(v: number) {
 // stored, so the matching preset highlights and edits to End date deselect it.
 function weeksEndDate(n: number): string {
   const [y, m, d] = form.date.split("-").map(Number);
-  return dateKey(new Date(y, m - 1, d + n * 7 - 1));
+  return dateKey(new Date(y, m - 1, d + n * 7 - 1)); // calendar arithmetic only
 }
 const activeWeeks = computed(() =>
   form.date ? (weekPresets.find((n) => form.endDate === weeksEndDate(n)) ?? null) : null,
@@ -167,9 +172,15 @@ const submitLabel = computed(() => {
 const attendeePayload = () =>
   form.attendees.map((id) => ({ trainee: id, status: priorStatus.get(id) ?? "booked" }));
 
+const back = () => backTarget(route.query, isEdit ? `/schedule/${editId}` : "/schedule");
+// The studio's wall-clock time on the chosen day, as an exact instant — so
+// 18:00 means 18:00 at the studio whatever zone this browser is in.
+const startISO = () => studioInstant(form.date, form.time).toISOString();
+
 async function submit() {
   if (!form.title.trim()) return (error.value = "Title is required");
   if (!form.date) return (error.value = "Date is required");
+  if (!form.durationMin || form.durationMin <= 0) return (error.value = "Duration must be at least 1 minute");
   saving.value = true;
   error.value = undefined;
   try {
@@ -177,7 +188,7 @@ async function submit() {
       await api.put(`/sessions/${editId}`, {
         title: form.title,
         type: form.type,
-        start: new Date(`${form.date}T${form.time}`).toISOString(),
+        start: startISO(),
         durationMin: form.durationMin,
         location: form.location,
         status: form.status,
@@ -185,9 +196,9 @@ async function submit() {
       });
       // The week list and this session's detail are both cached — drop them so
       // the change is on screen the moment we land back.
-      clearCache();
+      invalidate("sessions", "home-upcoming");
       toast("Session updated.", "success");
-      router.push(`/schedule/${editId}`);
+      router.push(back());
       return;
     }
     if (recurring.value) {
@@ -198,20 +209,18 @@ async function submit() {
       await api.post("/sessions/recurring", {
         title: form.title, type: form.type, weekdays: form.weekdays, time: form.time,
         durationMin: form.durationMin, location: form.location,
-        from: new Date(form.date).toISOString(),
-        to: new Date(form.endDate || form.date).toISOString(), attendees: attendeePayload(),
+        fromDay: form.date, toDay: form.endDate || form.date, attendees: attendeePayload(),
       });
     } else {
-      const start = new Date(`${form.date}T${form.time}`);
       await api.post("/sessions", {
-        title: form.title, type: form.type, start: start.toISOString(),
+        title: form.title, type: form.type, start: startISO(),
         durationMin: form.durationMin, location: form.location, attendees: attendeePayload(),
       });
     }
-    clearCache();
-    router.push("/schedule");
+    invalidate("sessions", "home-upcoming");
+    router.push(back());
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "Failed to save";
+    error.value = errMsg(e, "Failed to save");
     saving.value = false;
   }
 }
@@ -219,7 +228,7 @@ async function submit() {
 
 <template>
   <div class="space-y-4">
-    <RouterLink :to="isEdit ? `/schedule/${editId}` : '/schedule'" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+    <RouterLink :to="back()" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
       <ChevronLeft class="h-4 w-4" /> {{ isEdit ? "Session" : "Schedule" }}
     </RouterLink>
     <h1 class="font-display text-2xl font-semibold">{{ isEdit ? "Edit session" : "New session" }}</h1>

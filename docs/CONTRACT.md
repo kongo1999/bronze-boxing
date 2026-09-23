@@ -43,7 +43,7 @@ Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 ### Health & auth
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | Public. `{status, db, authRequired, time}` |
+| GET | `/health` | Public. `{status, db, authRequired, time, timezone}` — the SPA adopts `timezone` so it files days exactly as the API does |
 | POST | `/auth/login` | `{username, password, remember}` → sets the `bb_session` HttpOnly cookie |
 | POST | `/auth/logout` | Revokes the session and expires the cookie |
 | GET | `/auth/me` | `{username}` |
@@ -106,7 +106,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 |---|---|---|
 | GET | `/sessions?from=&to=` | `[from, to)` by `start` |
 | POST | `/sessions` | `durationMin` 1–1440; attendees must exist and be unique ([sample](fixtures/session.json)) |
-| POST | `/sessions/recurring` | Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates) |
+| POST | `/sessions/recurring` | `{title, type, weekdays[0-6], time "HH:MM", durationMin, fromDay, toDay, attendees}` — studio days, inclusive; each occurrence is at the studio wall-clock `time` (stable across DST). Span ≤ 366 days, ≤ 200 occurrences. Every occurrence starts `scheduled`, even if dated in the past. Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates). Legacy `from`/`to` instants still accepted. |
 | GET/PUT/DELETE | `/sessions/:id` | |
 | PATCH | `/sessions/:id/attendance` | `{trainee, status}` |
 | GET/POST | `/reminders` | `dueDay` (`YYYY-MM-DD`) preferred; `dueDate` accepted. Filters: `status=open\|done`, `priority`, `relatedType`+`relatedId` |
@@ -115,6 +115,16 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | GET | `/dashboard` | Adds `partialCount`, `unpaidCount`, `outstanding` |
 | GET | `/search?q=` | |
 | GET | `/audit/:entity/:id` | `entity` ∈ payment, expense, sale, charge, item, trainee, series, session, plan. Lines carry `actor` and `reason`. |
+
+## Frontend date handling
+
+The SPA never uses the browser's zone for a calendar decision
+(`frontend/src/lib/studio.ts`): days and months of API instants are computed
+in the studio zone, a session at "18:00" is sent as the instant the studio
+clock reads 18:00 (`studioInstant`), and week/month navigation uses day and
+month strings. The period on screen lives in the URL (`/schedule?week=`,
+`/payments?m=`, `/financials?m=`, reminder filters), and forms return to the
+page they were opened from (`?back=`).
 
 ## Collections added
 

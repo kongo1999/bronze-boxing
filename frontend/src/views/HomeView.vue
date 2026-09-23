@@ -16,6 +16,7 @@ import { api, qs } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
 import type { Session } from "@/lib/types";
 import { formatTime, formatLongDate } from "@/lib/format";
+import { studioParts, todayKey, dayOf, formatDay } from "@/lib/studio";
 
 interface MenuItem {
   to: string;
@@ -35,11 +36,11 @@ const items: MenuItem[] = [
 ];
 
 const greeting = computed(() => {
-  const h = new Date().getHours();
+  const h = studioParts(new Date()).hh;
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 });
 const dateLabel = computed(() =>
-  new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }),
+  formatDay(todayKey(), { weekday: "long", month: "long", day: "numeric" }),
 );
 
 // "Up next": the first scheduled session from now through the next 7 days.
@@ -55,7 +56,7 @@ const next = computed(() =>
   (upcoming.value ?? []).find((s) => s.status === "scheduled" && new Date(s.start) > new Date()),
 );
 const nextIsToday = computed(
-  () => !!next.value && new Date(next.value.start).toDateString() === new Date().toDateString(),
+  () => !!next.value && dayOf(next.value.start) === todayKey(),
 );
 </script>
 

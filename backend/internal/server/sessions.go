@@ -376,18 +376,33 @@ type recurringInput struct {
 	Title       string          `json:"title"`
 	Type        string          `json:"type"`
 	Weekdays    []int           `json:"weekdays"` // 0=Sunday .. 6=Saturday
-	Time        string          `json:"time"`     // "HH:MM"
+	Time        string          `json:"time"`     // "HH:MM" studio wall clock
 	DurationMin int             `json:"durationMin"`
 	Location    string          `json:"location"`
 	Capacity    int             `json:"capacity"`
 	Fee         float64         `json:"fee"`
-	From        *time.Time      `json:"from"`
+	FromDay     string          `json:"fromDay"` // studio-local YYYY-MM-DD (preferred)
+	ToDay       string          `json:"toDay"`   // inclusive
+	From        *time.Time      `json:"from"`    // legacy: UTC-midnight instants of the days
 	To          *time.Time      `json:"to"`
 	Attendees   []attendeeInput `json:"attendees"`
 }
 
-// recurring generates a series of sessions across [from, to] on the given
-// weekdays at the given time, linked by a shared seriesId.
+// spec turns the request into a recurrence, accepting the legacy from/to
+// instants (the old form sent each day's UTC midnight).
+func (in recurringInput) spec() seriesSpec {
+	s := seriesSpec{Weekdays: in.Weekdays, Time: defaultStr(in.Time, "18:00"), FromDay: in.FromDay, ToDay: in.ToDay}
+	if s.FromDay == "" && in.From != nil {
+		s.FromDay = in.From.UTC().Format("2006-01-02")
+	}
+	if s.ToDay == "" && in.To != nil {
+		s.ToDay = in.To.UTC().Format("2006-01-02")
+	}
+	return s
+}
+
+// recurring generates a series of sessions on the given weekdays at the
+// given studio time across [fromDay, toDay], linked by a shared seriesId.
 func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -399,69 +414,47 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 	if strings.TrimSpace(in.Title) == "" {
 		return badField("title", "title is required")
 	}
-	if in.From == nil || in.To == nil {
-		return badField("from", "from and to are required")
-	}
-	if len(in.Weekdays) == 0 {
-		return badField("weekdays", "at least one weekday is required")
-	}
 	if in.DurationMin <= 0 || in.DurationMin > 24*60 {
 		return badField("durationMin", "duration must be between 1 and 1440 minutes")
 	}
-	if err := oneOf("type", defaultStr(in.Type, models.SessionGroup), sessionTypes...); err != nil {
+	typ := defaultStr(in.Type, models.SessionGroup)
+	if err := oneOf("type", typ, sessionTypes...); err != nil {
 		return err
 	}
-	hh, mm := 18, 0
-	if parts := strings.Split(in.Time, ":"); len(parts) == 2 {
-		hh = atoiDefault(parts[0], 18)
-		mm = atoiDefault(parts[1], 0)
-	}
-	want := map[int]bool{}
-	for _, d := range in.Weekdays {
-		if d < 0 || d > 6 {
-			return badField("weekdays", "weekdays must be 0 (Sunday) to 6 (Saturday)")
-		}
-		want[d] = true
+	starts, err := in.spec().occurrences()
+	if err != nil {
+		return err
 	}
 	attendees, err := h.buildAttendees(ctx, in.Attendees)
 	if err != nil {
 		return err
 	}
 	seriesID := primitive.NewObjectID().Hex()
-
-	var docs []any
-	var preview []models.Session
 	now := time.Now()
-	day := time.Date(in.From.Year(), in.From.Month(), in.From.Day(), 0, 0, 0, 0, time.Local)
-	end := time.Date(in.To.Year(), in.To.Month(), in.To.Day(), 0, 0, 0, 0, time.Local)
-	for !day.After(end) {
-		if want[int(day.Weekday())] {
-			start := time.Date(day.Year(), day.Month(), day.Day(), hh, mm, 0, 0, time.Local)
-			status := models.SessScheduled
-			if start.Before(now) {
-				status = models.SessCompleted
-			}
-			s := models.Session{
-				Title:       strings.TrimSpace(in.Title),
-				Type:        defaultStr(in.Type, models.SessionGroup),
-				Start:       start,
-				DurationMin: in.DurationMin,
-				Location:    in.Location,
-				Capacity:    in.Capacity,
-				Fee:         in.Fee,
-				SeriesID:    seriesID,
-				Status:      status,
-				Attendees:   attendees,
-				CreatedAt:   now,
-				UpdatedAt:   now,
-			}
-			docs = append(docs, s)
-			preview = append(preview, s)
+	docs := make([]any, 0, len(starts))
+	preview := make([]models.Session, 0, len(starts))
+	for _, start := range starts {
+		// Every occurrence starts scheduled — even one dated in the past. A
+		// class counts as completed only when the coach marks it so.
+		s := models.Session{
+			Title:       strings.TrimSpace(in.Title),
+			Type:        typ,
+			Start:       start,
+			DurationMin: in.DurationMin,
+			Location:    in.Location,
+			Capacity:    in.Capacity,
+			Fee:         round2(in.Fee),
+			SeriesID:    seriesID,
+			Status:      models.SessScheduled,
+			Attendees:   attendees,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
-		day = day.AddDate(0, 0, 1)
+		docs = append(docs, s)
+		preview = append(preview, s)
 	}
 	if len(docs) == 0 {
-		return c.JSON(fiber.Map{"created": 0, "seriesId": seriesID, "sessions": []models.Session{}})
+		return badField("weekdays", "none of the chosen weekdays fall between those dates")
 	}
 	// Reject the whole series if any generated session would clash — no partial
 	// inserts. Sessions within a series never overlap each other (one per day),
@@ -483,7 +476,7 @@ func (h *sessionHandler) recurring(c *fiber.Ctx) error {
 		}
 		return apiErr(http.StatusConflict, CodeScheduleClash, fmt.Sprintf(
 			"%d session(s) in this series overlap existing bookings (first: %s). %s",
-			len(conflicts), conflicts[0].In(time.Local).Format("Mon Jan 2, 3:04 PM"), ruleHint(defaultStr(in.Type, models.SessionGroup)))).
+			len(conflicts), conflicts[0].In(time.Local).Format("Mon Jan 2, 3:04 PM"), ruleHint(typ))).
 			withDetails(map[string]any{"conflicts": dates})
 	}
 	if _, err := h.store.Coll(models.CollSessions).InsertMany(ctx, docs); err != nil {

@@ -1,3 +1,7 @@
+import { currentMonth, monthOf, formatMonth, shiftMonthKey } from "./studio";
+
+export { formatTime, formatLongDate, formatDateTime, formatDay, todayKey } from "./studio";
+
 const CURRENCY = (import.meta.env.VITE_CURRENCY as string) || "$";
 
 // Whole amounts read as "$12"; anything with cents shows both digits ("$12.50",
@@ -15,41 +19,31 @@ export function money(n: number): string {
   );
 }
 
-export function monthKey(d = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+/** Round a typed amount to the cent (inputs allow step 0.01). */
+export function cents(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
 }
 
-// Local-timezone YYYY-MM-DD. Unlike Date.toISOString(), this never shifts the
-// calendar day for browsers east of UTC (e.g. the studio's Beirut timezone).
+/** The studio month (YYYY-MM) of an instant — now by default. */
+export function monthKey(d?: Date): string {
+  return d ? monthOf(d) : currentMonth();
+}
+
+/**
+ * YYYY-MM-DD of a Date built from calendar parts (new Date(y, m, d)). Pure
+ * calendar formatting in the Date's own fields — for "today in the studio"
+ * use todayKey(), and for an API instant use dayOf().
+ */
 export function dateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export function monthLabel(key: string): string {
-  const [y, m] = key.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  return formatMonth(key);
 }
 
 export function shiftMonth(key: string, delta: number): string {
-  const [y, m] = key.split("-").map(Number);
-  return monthKey(new Date(y, m - 1 + delta, 1));
-}
-
-export function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-export function formatLongDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
+  return shiftMonthKey(key, delta);
 }
 
 export function initials(name: string): string {

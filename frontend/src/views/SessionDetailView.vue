@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
+import { backTarget, withBack } from "@/lib/route-state";
+import { formatDay, dayOf } from "@/lib/studio";
 import { ChevronLeft, Trash2, MapPin, Clock, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync, clearCache } from "@/lib/cache";
+import { useCachedAsync, invalidate } from "@/lib/cache";
 import type { Session, Attendee } from "@/lib/types";
 import { formatTime } from "@/lib/format";
 import Card from "@/components/ui/Card.vue";
@@ -19,8 +21,8 @@ const router = useRouter();
 const id = route.params.id as string;
 const { data: session, loading, error } = useCachedAsync(`/sessions/${id}`, () => api.get<Session>(`/sessions/${id}`));
 
-const dateLabel = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+const dateLabel = (iso: string) => formatDay(dayOf(iso), { weekday: "long", month: "long", day: "numeric" });
+const back = () => backTarget(route.query, "/schedule");
 
 // Optimistic: update the attendee chip immediately, fire one request, revert on failure.
 async function setAttendance(a: Attendee, status: string) {
@@ -39,8 +41,8 @@ async function remove() {
   deleting.value = true;
   try {
     await api.del(`/sessions/${id}`);
-    clearCache(); // the week list still holds this session
-    router.push("/schedule");
+    invalidate("sessions", "home-upcoming"); // the week list still holds this session
+    router.push(back());
   } catch (e) {
     deleting.value = false;
     toast(e instanceof Error && e.message ? e.message : "Couldn't delete session.", "error");
@@ -50,7 +52,7 @@ async function remove() {
 
 <template>
   <div class="space-y-4">
-    <RouterLink to="/schedule" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+    <RouterLink :to="back()" class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
       <ChevronLeft class="h-4 w-4" /> Schedule
     </RouterLink>
     <Skeleton v-if="loading" variant="detail" />
@@ -77,7 +79,7 @@ async function remove() {
           <span v-if="session.location" class="inline-flex items-center gap-1"><MapPin class="h-4 w-4" /> {{ session.location }}</span>
         </div>
         <div class="mt-4 flex gap-2">
-          <RouterLink :to="`/schedule/${id}/edit`" :class="btnClasses('ghost', 'sm')"><Pencil class="h-4 w-4" /> Edit</RouterLink>
+          <RouterLink :to="withBack(`/schedule/${id}/edit`, route.fullPath)" :class="btnClasses('ghost', 'sm')"><Pencil class="h-4 w-4" /> Edit</RouterLink>
           <button :class="btnClasses('danger', 'sm')" :disabled="deleting" @click="remove"><Trash2 class="h-4 w-4" /> {{ deleting ? "Deleting…" : "Delete" }}</button>
         </div>
       </Card>

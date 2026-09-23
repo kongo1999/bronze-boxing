@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
+import { useQueryState, withBack } from "@/lib/route-state";
+import { isMonthKey } from "@/lib/studio";
 import { Plus, Receipt, Download, Pencil } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { readCache, writeCache, clearCache } from "@/lib/cache";
+import { readCache, writeCache, invalidate } from "@/lib/cache";
 import { usePaged } from "@/lib/paginate";
 import type { Payment, SubStatus } from "@/lib/types";
 import { money, monthKey, monthLabel, formatLongDate } from "@/lib/format";
@@ -27,7 +29,10 @@ import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
 import { STATE_LABEL, STATE_TONE, byUrgency, collectable, collectLink, countDues } from "@/lib/dues";
 import { errMsg } from "@/lib/api";
 
-const month = ref(monthKey());
+// The month lives in the URL (?m=YYYY-MM) so logging a payment, opening a
+// trainee, or reloading returns to the same month.
+const route = useRoute();
+const month = useQueryState("m", () => monthKey(), isMonthKey);
 const subs = ref<SubStatus[]>([]);
 const payments = ref<Payment[]>([]);
 const loading = ref(false);
@@ -128,7 +133,7 @@ async function voidPayment(p: Payment) {
   if (reason === null) return;
   try {
     await api.post(`/payments/${p.id}/void`, { reason });
-    clearCache(); // trainee pages hold their own copy of the payment list
+    invalidate("payments", "dues", "subs", "financials", "dashboard", "trainees"); // trainee pages hold their own copy
     load();
     toast("Payment voided.", "success");
   } catch (e) {
@@ -172,7 +177,7 @@ async function saveEdit(id: string) {
       reason,
     });
     editingId.value = null;
-    clearCache();
+    invalidate("payments", "dues", "subs", "financials", "dashboard", "trainees");
     await load();
     toast("Payment updated.", "success");
   } catch (e) {
@@ -202,7 +207,7 @@ async function exportCsv() {
   <div class="space-y-4">
     <PageHeader eyebrow="Crew dues & fees" title="Money">
       <template #action>
-        <RouterLink to="/payments/new" :class="btnClasses('primary', 'sm')"><Plus class="h-4 w-4" /> Log</RouterLink>
+        <RouterLink :to="withBack('/payments/new', route.fullPath, { m: month })" :class="btnClasses('primary', 'sm')"><Plus class="h-4 w-4" /> Log</RouterLink>
       </template>
     </PageHeader>
 
@@ -234,7 +239,7 @@ async function exportCsv() {
         <template v-else>
           <ul class="space-y-2">
             <li v-for="s in subItems" :key="s.trainee.id" class="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
-              <RouterLink :to="`/trainees/${s.trainee.id}`" class="flex min-w-0 items-center gap-2.5">
+              <RouterLink :to="withBack(`/trainees/${s.trainee.id}`, route.fullPath)" class="flex min-w-0 items-center gap-2.5">
                 <Avatar :name="s.trainee.name" class="h-8 w-8 text-xs" />
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">{{ s.trainee.name }}</p>
@@ -247,7 +252,7 @@ async function exportCsv() {
                 <Badge :tone="STATE_TONE[s.state]">{{ STATE_LABEL[s.state] }}</Badge>
                 <RouterLink
                   v-if="collectable(s)"
-                  :to="collectLink(s)"
+                  :to="collectLink(s, route.fullPath)"
                   :class="btnClasses('primary', 'sm')"
                 >Collect</RouterLink>
               </div>

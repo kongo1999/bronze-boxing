@@ -28,6 +28,9 @@ func registerHealth(r fiber.Router, store *db.Store, authRequired bool) {
 			"db":           dbOK,
 			"authRequired": authRequired,
 			"time":         time.Now().UTC(),
+			// The studio's calendar zone, so the SPA files days and months
+			// exactly as the API does whatever zone the browser is in.
+			"timezone": time.Local.String(),
 		})
 	})
 }

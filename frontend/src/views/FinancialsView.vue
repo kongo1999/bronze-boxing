@@ -2,10 +2,12 @@
 import { ref, reactive, computed, watch } from "vue";
 import { Plus, Pencil, Download } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { readCache, writeCache, clearCache } from "@/lib/cache";
+import { readCache, writeCache, invalidate } from "@/lib/cache";
 import { usePaged } from "@/lib/paginate";
 import type { Financials, Expense } from "@/lib/types";
 import { money, monthKey, monthLabel } from "@/lib/format";
+import { useQueryState } from "@/lib/route-state";
+import { isMonthKey, todayKey, currentMonth } from "@/lib/studio";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import StatTile from "@/components/ui/StatTile.vue";
 import Card from "@/components/ui/Card.vue";
@@ -22,7 +24,7 @@ import { toast } from "@/lib/toast";
 import { askReason, VOID_REASONS, CORRECTION_REASONS } from "@/lib/prompt";
 import { errMsg } from "@/lib/api";
 
-const month = ref(monthKey());
+const month = useQueryState("m", () => monthKey(), isMonthKey);
 const fin = ref<Financials>();
 const expenses = ref<Expense[]>([]);
 const showAdd = ref(false);
@@ -30,7 +32,12 @@ const busy = ref(false); // guards against duplicate expense on double-click
 const loading = ref(false);
 const error = ref<string>();
 let loaded = false;
-const form = reactive({ amount: 0, category: "rent", note: "" });
+const form = reactive({ amount: 0, category: "rent", note: "", day: todayKey() });
+// Adding an expense while viewing an old month defaults its date into that
+// month (the 1st), so it lands where the owner is looking — and says so.
+watch(month, (m) => {
+  form.day = m === currentMonth() ? todayKey() : `${m}-01`;
+}, { immediate: true });
 
 const cacheKey = () => `financials:${month.value}`;
 let loadToken = 0;
@@ -88,9 +95,10 @@ async function addExpense() {
   if (busy.value || form.amount <= 0) return;
   busy.value = true;
   try {
-    await api.post("/expenses", { amount: form.amount, category: form.category, note: form.note });
+    await api.post("/expenses", { amount: form.amount, category: form.category, note: form.note, day: form.day });
     form.amount = 0;
     form.note = "";
+    invalidate("financials", "expenses");
     showAdd.value = false;
     await load();
   } catch (e) {
@@ -111,7 +119,7 @@ async function voidExpense(e: Expense) {
   if (reason === null) return;
   try {
     await api.post(`/expenses/${e.id}/void`, { reason });
-    clearCache();
+    invalidate("financials", "expenses");
     load();
     toast("Expense voided.", "success");
   } catch (err) {
@@ -162,7 +170,7 @@ async function saveExpenseEdit(id: string) {
   try {
     await api.put(`/expenses/${id}`, { amount: editForm.amount, category: editForm.category, note: editForm.note, reason });
     editingId.value = null;
-    clearCache();
+    invalidate("financials", "expenses");
     await load();
     toast("Expense updated.", "success");
   } catch (e) {
@@ -221,13 +229,18 @@ const catLabel: Record<string, string> = {
 
         <Card v-if="showAdd" class="space-y-3 p-4">
           <div class="grid grid-cols-2 gap-3">
-            <input v-model.number="form.amount" type="number" min="0" placeholder="Amount" :class="inputCls" />
+            <input v-model.number="form.amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Amount" aria-label="Amount" :class="inputCls" />
             <select v-model="form.category" :class="inputCls">
               <option v-for="(l, k) in catLabel" :key="k" :value="k">{{ l }}</option>
             </select>
           </div>
-          <input v-model="form.note" placeholder="Note (optional)" :class="inputCls" />
-          <Button size="sm" :disabled="busy || form.amount <= 0" @click="addExpense">{{ busy ? "Adding…" : "Add expense" }}</Button>
+          <input v-model="form.note" placeholder="Note (optional)" aria-label="Note" :class="inputCls" />
+          <label class="block">
+            <span class="mb-1 block text-xs text-faint">Paid on</span>
+            <input v-model="form.day" type="date" :class="inputCls" />
+          </label>
+          <p class="text-xs text-faint">Counts toward {{ monthLabel(form.day.slice(0, 7)) }}{{ form.day.slice(0, 7) !== month ? " — not the month you're viewing" : "" }}.</p>
+          <Button size="sm" :disabled="busy || form.amount <= 0 || !form.day" @click="addExpense">{{ busy ? "Adding…" : "Add expense" }}</Button>
         </Card>
 
         <SearchInput v-model="q" placeholder="Search outgoings — category, note, amount…" />

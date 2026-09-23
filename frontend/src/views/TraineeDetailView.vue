@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Trash2, Phone, Wallet } from "lucide-vue-next";
 import { api } from "@/lib/api";
-import { useCachedAsync, clearCache } from "@/lib/cache";
+import { useCachedAsync, invalidate } from "@/lib/cache";
 import { usePaged } from "@/lib/paginate";
 import type { Trainee, Payment, SubStatus } from "@/lib/types";
 import { money, formatLongDate, monthKey, monthLabel } from "@/lib/format";
@@ -48,7 +48,7 @@ async function remove() {
   deleting.value = true;
   try {
     await api.del(`/trainees/${id}`);
-    clearCache();
+    invalidate("trainees", "dues", "subs");
     router.push("/trainees");
   } catch (e) {
     deleting.value = false;
