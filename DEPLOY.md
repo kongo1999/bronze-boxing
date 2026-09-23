@@ -112,9 +112,23 @@ Before calling a release done:
 
 ### One-time upgrade: standalone Mongo → replica set (September 2026 release)
 The first deploy of this release restarts the existing `mongo_data` volume as
-a replica set. Data is kept; nothing is deleted. Rehearsed locally on a copy
-of the old standalone layout (legacy data → replica set → migrate twice →
-verify → API boots).
+a replica set. Data is kept; nothing is deleted.
+
+**The guarded way — one script** (after `git pull`, from `/root/bronze-boxing`):
+```bash
+./ops/deploy/upgrade.sh
+```
+It backs up to `backups/pre-upgrade-<time>.archive.gz` (and stops if that is
+empty), builds, then **rehearses on a throwaway copy**: restores that backup
+into a temporary Mongo replica set, runs the migrations twice and verifies —
+the live database untouched. Only then does it ask before upgrading for real
+(Mongo on the same volume as a replica set, migrate, start, verify, health
+check). It never removes a volume; its temporary rehearsal container and
+network are removed when it exits. Rehearsed end to end on a copy of the
+July (`dc688d5`) layout with its demo data: every count kept, `verify: OK`,
+login working. Copy the pre-upgrade backup off the droplet afterwards.
+
+The same steps by hand:
 1. **Back up** (see "Backups") and copy the archive off the droplet.
 2. `git pull && docker compose build`
 3. `docker compose up -d mongo` — recreated with `--replSet rs0 --keyFile …`;
