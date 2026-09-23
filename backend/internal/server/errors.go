@@ -35,6 +35,7 @@ const (
 	CodeConflict        = "CONFLICT"
 	CodeNoTransactions  = "NO_TRANSACTIONS"
 	CodeUnverifiedDue   = "UNVERIFIED_DUE"
+	CodeNotStarted      = "NOT_STARTED"
 )
 
 // APIError is an error with an HTTP status, a stable code, and optionally the

@@ -70,8 +70,12 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatalf("TEST_MONGODB_URI must point at a replica set (transactions are under test)")
 	}
 	ctx := context.Background()
+	// Scenarios run classes on 2027 dates as if they had happened; tests of
+	// the "not started yet" rule set their own clock.
+	clockNow = func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local) }
 	t.Cleanup(func() {
 		failpoint = func(string) error { return nil }
+		clockNow = time.Now
 		if strings.HasPrefix(store.DB.Name(), testDBPrefix) { // only ever drop our own
 			_ = store.DB.Drop(context.Background())
 		}
@@ -221,4 +225,21 @@ func (e *testEnv) pay(trainee string, amount float64, month string) paymentOut {
 	var p paymentOut
 	e.ok("POST", "/payments", map[string]any{"trainee": trainee, "amount": amount, "type": "subscription", "periodMonth": month}, &p)
 	return p
+}
+
+// runMigration re-runs one migration against the test database and returns
+// the counts it recorded.
+func runMigration(t *testing.T, e *testEnv, id string) map[string]int {
+	t.Helper()
+	r := &migrate.Runner{Store: e.store}
+	if err := r.Run(e.ctx, Migrations(), migrate.Options{Only: id, Rerun: true}); err != nil {
+		t.Fatalf("migrate %s: %v", id, err)
+	}
+	var rec struct {
+		Result map[string]int `bson:"result"`
+	}
+	if err := e.store.Coll(migrate.Coll).FindOne(e.ctx, bson.M{"_id": id}).Decode(&rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Result
 }

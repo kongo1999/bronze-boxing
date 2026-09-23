@@ -25,6 +25,8 @@ export interface Trainee {
   /** First month billed at monthlyFee — later than now when a change is scheduled. */
   feeFromMonth?: string;
   notes?: string;
+  /** Set when a former trainee is archived off the everyday roster. */
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,6 +48,67 @@ export interface Attendee {
   trainee: string;
   traineeName?: string;
   status: AttendanceStatus;
+  /** The session plan this booking is credited to, if any. */
+  planId?: string;
+}
+
+/** A trainee's session allowance ("12 private sessions") and its progress. */
+export interface SessionPlan {
+  id: string;
+  trainee: string;
+  traineeName: string;
+  title: string;
+  targetCount: number;
+  startDate: string;
+  endDate?: string;
+  sessionType?: SessionType | "";
+  status: "active" | "completed" | "cancelled";
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  progress: PlanProgress;
+}
+
+export interface PlanProgress {
+  target: number;
+  /** Credited: session completed AND the trainee marked attended. */
+  completed: number;
+  remaining: number;
+  upcomingBooked: number;
+  /** Completed classes where the trainee is still "booked". */
+  attendanceNeeded: number;
+  noShows: number;
+  cancelled: number;
+  unassignedSlots: number;
+  credited: string[];
+  upcoming: string[];
+}
+
+export interface SeriesProgress {
+  seriesId: string;
+  title: string;
+  /** The denominator: occurrences planned (doesn't shrink on a cancellation). */
+  planned: number;
+  created: number;
+  completed: number;
+  scheduled: number;
+  cancelled: number;
+  attendanceNeeded: number;
+  inferred?: boolean;
+  status: string;
+}
+
+export interface SeriesDetail {
+  progress: SeriesProgress;
+  series: { id?: string; seriesId: string; weekdays?: number[]; time?: string; fromDay?: string; toDay?: string; plannedCount?: number };
+  occurrences: { id: string; start: string; status: SessionStatus; booked: number; attendanceNeeded: boolean }[];
+}
+
+export interface RecurringPreview {
+  count: number;
+  conflicts: number;
+  occurrences: { start: string; day: string; conflict?: { title: string; start: string; type: SessionType } }[];
+  planProblem?: { code: string; error: string; details?: Record<string, unknown> };
 }
 
 export interface Session {

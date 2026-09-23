@@ -24,6 +24,7 @@ func Migrations() []migrate.Migration {
 		{ID: "2026-09-003-subscription-terms-charges", Description: "Membership terms from current trainee records; monthly charges from existing dues", Up: migrateTermsAndCharges},
 		{ID: "2026-09-004-reminder-due-day", Description: "Store each reminder's studio-local due day", Up: migrateReminderDueDay},
 		{ID: "2026-09-005-closings-returns-indexes", Description: "Indexes for daily cash counts and sale returns", Up: migrateClosingsReturnsIndexes},
+		{ID: "2026-09-006-series-and-plans", Description: "Series records for existing recurring sessions; indexes for series and session plans", Up: migrateSeriesAndPlans},
 	}
 }
 
@@ -92,6 +93,62 @@ func migrateClosingsReturnsIndexes(ctx context.Context, r *migrate.Runner) (migr
 			return res, err
 		}
 		res.Add("indexes", n)
+	}
+	return res, nil
+}
+
+// migrateSeriesAndPlans gives every existing recurring series a record. The
+// original request (how many weeks were asked for) was never stored, so the
+// planned count is the number of occurrences still present — marked
+// inferred, and shown that way.
+func migrateSeriesAndPlans(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {
+	res := migrate.Result{}
+	for coll, specs := range map[string][]mongo.IndexModel{
+		models.CollSeries:   {idx(bson.D{{Key: "seriesId", Value: 1}}, true)},
+		models.CollPlans:    {idx(bson.D{{Key: "trainee", Value: 1}, {Key: "status", Value: 1}}, false)},
+		models.CollSessions: {idx(bson.D{{Key: "attendees.planId", Value: 1}}, false)},
+	} {
+		n, err := r.EnsureIndexes(ctx, coll, specs)
+		if err != nil {
+			return res, err
+		}
+		res.Add("indexes", n)
+	}
+	ids, err := r.Store.Coll(models.CollSessions).Distinct(ctx, "seriesId", bson.M{"seriesId": bson.M{"$nin": bson.A{nil, ""}}})
+	if err != nil {
+		return res, err
+	}
+	for _, v := range ids {
+		sid, ok := v.(string)
+		if !ok {
+			continue
+		}
+		n, err := r.Store.Coll(models.CollSeries).CountDocuments(ctx, bson.M{"seriesId": sid})
+		if err != nil {
+			return res, err
+		}
+		if n > 0 {
+			res.Inc("series_existing")
+			continue
+		}
+		cur, err := r.Store.Coll(models.CollSessions).Find(ctx, bson.M{"seriesId": sid}, options.Find().SetSort(bson.D{{Key: "start", Value: 1}}))
+		if err != nil {
+			return res, err
+		}
+		var occ []models.Session
+		if err := cur.All(ctx, &occ); err != nil {
+			return res, err
+		}
+		if len(occ) == 0 {
+			continue
+		}
+		res.Inc("series_inferred")
+		if r.DryRun {
+			continue
+		}
+		if _, err := r.Store.Coll(models.CollSeries).InsertOne(ctx, inferSeries(sid, occ, r.Now)); err != nil && !isDup(err) {
+			return res, err
+		}
 	}
 	return res, nil
 }

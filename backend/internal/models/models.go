@@ -94,6 +94,8 @@ const (
 	CollCharges      = "subscription_charges"
 	CollClosings     = "cash_closings"
 	CollReturns      = "sale_returns"
+	CollSeries       = "session_series"
+	CollPlans        = "trainee_session_plans"
 )
 
 // User is a staff login account. The admin account is bootstrapped from
@@ -129,16 +131,23 @@ type Trainee struct {
 	Status     string  `bson:"status" json:"status"`
 	// FeeFromMonth is the first month billed at MonthlyFee (so the UI can say
 	// "$120/mo from October" when a change is scheduled).
-	FeeFromMonth string    `bson:"feeFromMonth,omitempty" json:"feeFromMonth,omitempty"`
-	Notes        string    `bson:"notes,omitempty" json:"notes,omitempty"`
-	CreatedAt    time.Time `bson:"createdAt" json:"createdAt"`
-	UpdatedAt    time.Time `bson:"updatedAt" json:"updatedAt"`
+	FeeFromMonth string `bson:"feeFromMonth,omitempty" json:"feeFromMonth,omitempty"`
+	Notes        string `bson:"notes,omitempty" json:"notes,omitempty"`
+	// ArchivedAt hides a former trainee from the everyday roster while every
+	// payment, session and sale that names them stays linked and visible.
+	ArchivedAt *time.Time `bson:"archivedAt,omitempty" json:"archivedAt,omitempty"`
+	CreatedAt  time.Time  `bson:"createdAt" json:"createdAt"`
+	UpdatedAt  time.Time  `bson:"updatedAt" json:"updatedAt"`
 }
 
 type Attendee struct {
 	Trainee     primitive.ObjectID `bson:"trainee" json:"trainee"`
 	TraineeName string             `bson:"traineeName,omitempty" json:"traineeName,omitempty"`
 	Status      string             `bson:"status" json:"status"`
+	// PlanID credits this booking to one of the trainee's session plans. A
+	// booking credits at most one plan; it counts toward it only once the
+	// session is completed AND this attendee is marked attended.
+	PlanID *primitive.ObjectID `bson:"planId,omitempty" json:"planId,omitempty"`
 }
 
 type Session struct {
@@ -361,4 +370,47 @@ type SaleReturn struct {
 	Reason    string             `bson:"reason" json:"reason"`
 	CreatedAt time.Time          `bson:"createdAt" json:"createdAt"`
 	Actor     string             `bson:"actor,omitempty" json:"actor,omitempty"`
+}
+
+// SessionSeries is the record of a recurring series: what was asked for and,
+// crucially, how many occurrences were planned — the denominator of
+// "9/12 completed" — which must not shrink when an occurrence is cancelled.
+// It changes only through an explicit, audited extension or reduction.
+type SessionSeries struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	SeriesID     string             `bson:"seriesId" json:"seriesId"`
+	Title        string             `bson:"title" json:"title"`
+	Type         string             `bson:"type" json:"type"`
+	Weekdays     []int              `bson:"weekdays,omitempty" json:"weekdays,omitempty"`
+	Time         string             `bson:"time,omitempty" json:"time,omitempty"`
+	DurationMin  int                `bson:"durationMin,omitempty" json:"durationMin,omitempty"`
+	FromDay      string             `bson:"fromDay" json:"fromDay"`
+	ToDay        string             `bson:"toDay" json:"toDay"`
+	PlannedCount int                `bson:"plannedCount" json:"plannedCount"`
+	Status       string             `bson:"status" json:"status"` // active | ended
+	// Inferred marks a series rebuilt from existing occurrences by a
+	// migration: its planned count is what was still stored, not what was
+	// originally asked for.
+	Inferred  bool      `bson:"inferred,omitempty" json:"inferred,omitempty"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
+}
+
+// SessionPlan is a trainee's session allowance, e.g. "12 private sessions".
+// Progress is never stored: it is computed from the sessions whose attendee
+// entry for this trainee points at the plan, so repeated updates, moves and
+// reopened sessions can't double count.
+type SessionPlan struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Trainee     primitive.ObjectID `bson:"trainee" json:"trainee"`
+	TraineeName string             `bson:"traineeName" json:"traineeName"`
+	Title       string             `bson:"title" json:"title"`
+	TargetCount int                `bson:"targetCount" json:"targetCount"`
+	StartDate   string             `bson:"startDate" json:"startDate"`                 // studio day
+	EndDate     string             `bson:"endDate,omitempty" json:"endDate,omitempty"` // optional, inclusive
+	SessionType string             `bson:"sessionType,omitempty" json:"sessionType,omitempty"`
+	Status      string             `bson:"status" json:"status"` // active | completed | cancelled
+	Notes       string             `bson:"notes,omitempty" json:"notes,omitempty"`
+	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
+	UpdatedAt   time.Time          `bson:"updatedAt" json:"updatedAt"`
 }

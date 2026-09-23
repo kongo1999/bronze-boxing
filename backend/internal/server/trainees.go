@@ -29,6 +29,34 @@ func registerTrainees(r fiber.Router, store *db.Store) {
 	g.Delete("/:id", h.remove)
 	g.Get("/:id/terms", h.terms)
 	g.Post("/:id/terms", h.addTerms)
+	g.Get("/:id/links", h.links)
+	g.Post("/:id/archive", h.archive)
+	g.Post("/:id/unarchive", h.unarchive)
+}
+
+// phoneRe allows what people actually type: digits, spaces, + ( ) - .
+var phoneRe = regexp.MustCompile(`^\+?[0-9 ()\-.]{6,24}$`)
+
+// normalizePhone trims and collapses spacing; it keeps the number as typed
+// (local format is what the coach reads) but rejects anything that isn't one.
+func normalizePhone(p string) (string, error) {
+	p = strings.Join(strings.Fields(p), " ")
+	if p == "" {
+		return "", nil
+	}
+	if !phoneRe.MatchString(p) {
+		return "", badField("phone", "that doesn't look like a phone number")
+	}
+	digits := 0
+	for _, r := range p {
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+	if digits < 6 || digits > 15 {
+		return "", badField("phone", "a phone number has 6 to 15 digits")
+	}
+	return p, nil
 }
 
 var (
@@ -59,6 +87,14 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 	if q := strings.TrimSpace(c.Query("q")); q != "" {
 		filter["name"] = bson.M{"$regex": regexp.QuoteMeta(q), "$options": "i"}
 	}
+	// Archived former trainees stay out of the everyday roster unless asked for.
+	switch c.Query("archived") {
+	case "only":
+		filter["archivedAt"] = bson.M{"$ne": nil}
+	case "1", "include":
+	default:
+		filter["archivedAt"] = nil
+	}
 	cur, err := h.store.Coll(models.CollTrainees).
 		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -87,8 +123,12 @@ func (h *traineeHandler) get(c *fiber.Ctx) error {
 
 func validateTrainee(in traineeInput) (traineeInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
-	in.Phone = strings.TrimSpace(in.Phone)
 	in.Notes = strings.TrimSpace(in.Notes)
+	phone, err := normalizePhone(in.Phone)
+	if err != nil {
+		return in, err
+	}
+	in.Phone = phone
 	in.Status = defaultStr(in.Status, models.StatusActive)
 	if in.Name == "" {
 		return in, badField("name", "name is required")
@@ -383,12 +423,136 @@ func (h *traineeHandler) addTerms(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(term)
 }
 
+type traineeLinks struct {
+	Payments int64 `json:"payments"`
+	Sessions int64 `json:"sessions"`
+	Sales    int64 `json:"sales"`
+	Charges  int64 `json:"charges"`
+	Plans    int64 `json:"plans"`
+}
+
+func (l traineeLinks) any() bool {
+	return l.Payments+l.Sessions+l.Sales+l.Charges+l.Plans > 0
+}
+
+func countLinks(ctx context.Context, store *db.Store, id primitive.ObjectID) (traineeLinks, error) {
+	var l traineeLinks
+	var err error
+	if l.Payments, err = store.Coll(models.CollPayments).CountDocuments(ctx, bson.M{"trainee": id}); err != nil {
+		return l, err
+	}
+	if l.Sessions, err = store.Coll(models.CollSessions).CountDocuments(ctx, bson.M{"attendees.trainee": id}); err != nil {
+		return l, err
+	}
+	if l.Sales, err = store.Coll(models.CollSales).CountDocuments(ctx, bson.M{"trainee": id}); err != nil {
+		return l, err
+	}
+	if l.Charges, err = store.Coll(models.CollCharges).CountDocuments(ctx, bson.M{"trainee": id}); err != nil {
+		return l, err
+	}
+	l.Plans, err = store.Coll(models.CollPlans).CountDocuments(ctx, bson.M{"trainee": id})
+	return l, err
+}
+
+// links reports what records name this trainee — shown before any delete.
+func (h *traineeHandler) links(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	l, err := countLinks(ctx, h.store, id)
+	if err != nil {
+		return err
+	}
+	return c.JSON(l)
+}
+
+// archive retires a trainee without erasing anything: they leave the roster
+// and stop being billed from next month (an issued charge stands), while
+// their payments, attendance and purchases stay exactly where they are.
+func (h *traineeHandler) archive(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.BodyParser(&in)
+	t, err := loadTrainee(ctx, h.store, id.Hex(), "id")
+	if err != nil {
+		return notFound("trainee")
+	}
+	actor := actorOf(c)
+	now := time.Now()
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		if t.Status == models.StatusActive {
+			if _, err := applyTermsChange(tx, h.store, t, termsChange{
+				EffectiveDate: models.DateKey(now), BillingFromMonth: models.ShiftMonth(models.MonthKey(now), 1),
+				MonthlyFee: t.MonthlyFee, Status: models.StatusInactive, Reason: defaultStr(strings.TrimSpace(in.Reason), "archived"), Confirm: true,
+			}, actor); err != nil {
+				return err
+			}
+		}
+		if _, err := h.store.Coll(models.CollTrainees).UpdateOne(tx, bson.M{"_id": id}, bson.M{"$set": bson.M{"archivedAt": now, "updatedAt": now}}); err != nil {
+			return err
+		}
+		return writeAudit(tx, h.store, auditLine{Entity: "trainee", Ref: id, Action: "archive", Actor: actor, Reason: strings.TrimSpace(in.Reason)})
+	})
+	if err != nil {
+		return err
+	}
+	return h.get(c)
+}
+
+// unarchive brings a trainee back onto the roster (their status stays
+// inactive until a fee/status change makes them active again).
+func (h *traineeHandler) unarchive(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	id, err := objID(c)
+	if err != nil {
+		return err
+	}
+	res, err := h.store.Coll(models.CollTrainees).UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$unset": bson.M{"archivedAt": ""}, "$set": bson.M{"updatedAt": time.Now()},
+	})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return notFound("trainee")
+	}
+	return h.get(c)
+}
+
+// remove hard-deletes a trainee. With nothing linked it just goes; once any
+// payment, session, sale, charge or plan names them it is refused (archive
+// instead) unless the caller confirms by typing the trainee's exact name —
+// and even then those records keep the name they were saved with.
 func (h *traineeHandler) remove(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	id, err := objID(c)
 	if err != nil {
 		return err
+	}
+	t, err := loadTrainee(ctx, h.store, id.Hex(), "id")
+	if err != nil {
+		return notFound("trainee")
+	}
+	l, err := countLinks(ctx, h.store, id)
+	if err != nil {
+		return err
+	}
+	if l.any() && c.Query("confirmName") != t.Name {
+		return apiErr(http.StatusConflict, CodeConflict,
+			"this trainee has history — archive them instead, or confirm by typing their full name to delete anyway").
+			withField("confirmName").withDetails(l)
 	}
 	if _, err := h.store.Coll(models.CollTrainees).DeleteOne(ctx, bson.M{"_id": id}); err != nil {
 		return err

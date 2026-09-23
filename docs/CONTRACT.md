@@ -35,7 +35,9 @@ month the fee covers (dues filter by it).
 `DUE_BELOW_PAID`, `ALREADY_VOIDED`, `VOIDED_LOCKED`, `LINKED_SALE`,
 `SCHEDULE_CONFLICT` (details: conflicts), `CAPACITY_EXCEEDED`, `DUPLICATE`
 (details: existing), `TRAINEE_NOT_FOUND`, `ITEM_NOT_FOUND`, `ITEM_INACTIVE`,
-`RETURN_EXCEEDS_SALE`, `CONFLICT`, `NO_TRANSACTIONS`, `UNAUTHORIZED`, `RATE_LIMITED`.
+`RETURN_EXCEEDS_SALE`, `CONFLICT`, `NO_TRANSACTIONS`, `UNAUTHORIZED`, `RATE_LIMITED`,
+`PLAN_FULL` (details: plan progress), `PLAN_MISMATCH` (wrong trainee, type or
+dates for the plan), `NOT_STARTED` (an outcome recorded before the class began).
 Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 
 ## Routes
@@ -51,13 +53,15 @@ Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 ### Trainees
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/trainees?q=` | Array of [trainee](fixtures/trainee.json) |
+| GET | `/trainees?q=&archived=include\|only` | Array of [trainee](fixtures/trainee.json); archived trainees are left out unless asked for |
 | POST | `/trainees` | Creates the trainee, its first membership term (billing from this month) and this month's charge |
 | GET | `/trainees/:id` | |
 | PUT | `/trainees/:id` | Details edit. A fee/status change appends a term: `termsApplyFrom: "next_month"` (default) or `"this_month"` (re-prices this month's issued charge; needs `termsReason`). A second change on the same day returns `DUPLICATE` with the existing term unless `termsConfirm: true`. |
 | GET | `/trainees/:id/terms` | Effective-dated terms, newest first |
 | POST | `/trainees/:id/terms` | `{effectiveDate, billingFromMonth, monthlyFee, status, reason?, confirm?}` |
-| DELETE | `/trainees/:id` | Hard delete (history keeps name snapshots) |
+| GET | `/trainees/:id/links` | Counts of linked records `{payments, sessions, sales, charges, plans}` |
+| POST | `/trainees/:id/archive` | `{reason?}` — hides from the roster and appends an inactive term (billing stops from next month); history kept; audited. `/unarchive` restores. |
+| DELETE | `/trainees/:id?confirmName=` | Hard delete. With linked records it's refused (`CONFLICT`, details = links) unless `confirmName` is the trainee's exact name; archiving is the safe path. |
 
 `monthlyFee`/`status` on a trainee summarize the latest recorded terms (the
 fee going forward, from `feeFromMonth`). Historical dues never come from them.
@@ -107,11 +111,22 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Sessions, reminders, dashboard, search, audit
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/sessions?from=&to=` | `[from, to)` by `start` |
-| POST | `/sessions` | `durationMin` 1–1440; attendees must exist and be unique ([sample](fixtures/session.json)) |
-| POST | `/sessions/recurring` | `{title, type, weekdays[0-6], time "HH:MM", durationMin, fromDay, toDay, attendees}` — studio days, inclusive; each occurrence is at the studio wall-clock `time` (stable across DST). Span ≤ 366 days, ≤ 200 occurrences. Every occurrence starts `scheduled`, even if dated in the past. Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates). Legacy `from`/`to` instants still accepted. |
-| GET/PUT/DELETE | `/sessions/:id` | |
-| PATCH | `/sessions/:id/attendance` | `{trainee, status}` |
+| GET | `/sessions?from=&to=&trainee=&plan=&series=&order=desc&limit=&offset=` | `[from, to)` by `start`. With `limit` a page; without any filter or limit it's refused. |
+| POST | `/sessions` | `durationMin` 1–1440; `capacity` (0 = no limit); attendees `{trainee, status, planId?}` must exist and be unique; a `planId` must fit the plan (`PLAN_MISMATCH`) and not overbook it (`PLAN_FULL`, `planOverride: true` to book anyway) ([sample](fixtures/session.json)) |
+| POST | `/sessions/recurring/preview` | Same body as `/recurring`; returns `{count, occurrences[{start, conflict?}], conflicts, planProblem?{code, error, details}}` without writing |
+| POST | `/sessions/recurring` | `{title, type, weekdays[0-6], time "HH:MM", durationMin, fromDay, toDay, attendees}` — studio days, inclusive; each occurrence is at the studio wall-clock `time` (stable across DST). Span ≤ 366 days, ≤ 200 occurrences. Every occurrence starts `scheduled`, even if dated in the past. Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates). Legacy `from`/`to` instants still accepted. Creates a `session_series` document (`plannedCount`) and all occurrences in one transaction; attendees start `booked`. |
+| GET | `/sessions/series?ids=` | Progress per series: `{planned, completed, scheduled, cancelled, attendanceNeeded, inferred, status}` |
+| GET | `/sessions/series/:seriesId/progress` | Progress plus every occurrence `{id, start, status, booked, attendanceNeeded}` |
+| PATCH | `/sessions/series/:seriesId` | `{fromOccurrence, scope: "future", changes{title?, time?, durationMin?, type?, location?, capacity?, status?}, reason}` — changes this and later occurrences, never completed ones; atomic and audited; re-checks clashes |
+| POST | `/sessions/series/:seriesId/extend` | `{toDay, reason}` — adds occurrences on the same pattern; `plannedCount` grows; audited |
+| POST | `/sessions/series/:seriesId/end` | `{fromOccurrence?, reason}` — cancels scheduled occurrences from that one (default: from now); `plannedCount` shrinks; completed classes untouched; audited |
+| GET/PUT/DELETE | `/sessions/:id` | PUT is partial. DELETE is refused once attendance is recorded (cancel instead). |
+| PATCH | `/sessions/:id/attendance` | `{trainee, status, planId?, override?}` — books (atomically within `capacity`, else `CAPACITY_EXCEEDED`) or updates; `planId: ""` unlinks |
+| POST | `/sessions/:id/attendance/bulk` | `{status, only?: "booked"}` or `{status, trainees[]}` — e.g. mark everyone still booked as attended |
+| GET | `/trainees/:id/session-plans` | The trainee's plans with computed `progress` |
+| POST | `/trainees/:id/session-plans` | `{title, targetCount ≥ 1, startDate, endDate?, sessionType?, notes?}` |
+| GET | `/session-plans?trainees=a,b&status=` | Plans for several trainees (booking forms) |
+| GET/PATCH | `/session-plans/:id` | PATCH `{title?, targetCount?, startDate?, endDate?, sessionType?, status?, notes?, reason}` — a reason is required for target, dates or status changes; audited |
 | GET/POST | `/reminders` | `dueDay` (`YYYY-MM-DD`) preferred; `dueDate` accepted. Filters: `status=open\|done`, `priority`, `relatedType`+`relatedId` |
 | GET/PUT/DELETE | `/reminders/:id` | Completing a recurring reminder creates the next instance |
 | POST | `/reminders/:id/snooze` | `{days}` or `{until}` |
@@ -139,6 +154,8 @@ page they were opened from (`?back=`).
 | `schema_migrations` | Applied migration ids |
 | `cash_closings` | One counted closing amount per studio day (unique `day`) |
 | `sale_returns` | Partial returns of sales (Phase 5 endpoint); counted in the cash month of the return while the sale is live |
+| `session_series` | A recurring series: pattern, `plannedCount`, `inferred` for series found in old data |
+| `trainee_session_plans` | A trainee's package of N sessions; progress is computed from linked attendance, never stored |
 
 ## Phase 0–1 migration impact
 
@@ -148,6 +165,17 @@ Run `migrate -dry-run` first; see DEPLOY.md.
 2. `2026-09-002-stock-ledger-opening` — one `opening` movement per item equal to today's stock. Stock history before it is not reconstructed; historical end-of-month stock is only available from this point.
 3. `2026-09-003-subscription-terms-charges` — one `migrated` term per trainee (today's fee/status, billing from the migration month, effective from the trainee's creation date — an inference, flagged by `source`). Charges: the migration month from the terms; every earlier (trainee, month) with live subscription payments becomes `imported_unverified` with due = paid; **no unpaid charge is invented for any earlier month**. Subscription payments without a trainee or period are listed for review and count toward no dues (as before).
 4. `2026-09-004-reminder-due-day` — stores each reminder's studio-local `dueDay`.
+
+5. `2026-09-005-closings-returns-indexes` — unique `day` on cash closings, indexes on sale returns.
+6. `2026-09-006-series-and-plans` — indexes for series/plans/attendee plan links; each distinct `seriesId` already on sessions gets a `session_series` document with `inferred: true` and `plannedCount` = its non-cancelled occurrences (no sessions are changed).
+
+Plan and series counting: a plan's `completed` counts linked bookings where the
+class is completed **and** the trainee attended. A completed class where the
+trainee is still `booked` is `attendanceNeeded`, not credited; no-shows and
+cancellations are shown separately. A series' `completed` counts completed
+occurrences. Recording an outcome (class done, attended, no-show) before the
+class has started is refused (`NOT_STARTED`), with a 30-minute grace for
+taking attendance at the door.
 
 Behaviour changes a client will notice: voids and amount/quantity/stock
 corrections require a reason; subscription payments require a trainee and a

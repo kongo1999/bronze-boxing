@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, CalendarPlus, Check, CalendarDays, Plus, Tri
 import { api, errMsg } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import { toast } from "@/lib/toast";
-import type { Session } from "@/lib/types";
+import type { Session, SeriesProgress } from "@/lib/types";
 import {
   addDays, browserIsElsewhere, dayOf, dayStartISO, formatDay, formatTime, isDayKey, mondayOf, studioTZ, todayKey,
 } from "@/lib/studio";
@@ -50,6 +50,7 @@ async function load() {
     sessions.value = res;
     loadedWeek = weekStart.value;
     writeCache(cacheKey(), res);
+    loadSeries(res);
   } catch (e) {
     if (my !== loadToken) return;
     // Never show a failed load as an empty week: say so, keep a retry.
@@ -57,6 +58,20 @@ async function load() {
     if (loadedWeek === weekStart.value) toast("Couldn't refresh — showing saved data.", "error");
   } finally {
     if (my === loadToken) loading.value = false;
+  }
+}
+// Series counters ("9/12") for every series visible this week, in one call.
+const series = ref<Record<string, SeriesProgress>>({});
+async function loadSeries(list: Session[]) {
+  const ids = [...new Set(list.map((s) => s.seriesId).filter(Boolean))] as string[];
+  if (!ids.length) return;
+  try {
+    const rows = await api.get<SeriesProgress[]>(`/sessions/series?ids=${ids.join(",")}`);
+    const next = { ...series.value };
+    for (const r of rows) next[r.seriesId] = r;
+    series.value = next;
+  } catch {
+    /* counters are a hint; the week still shows */
   }
 }
 function showCached(): boolean {
@@ -276,6 +291,9 @@ async function toggleDone(s: Session) {
                   <span v-if="isFull(s)" class="text-partial">· full</span>
                 </template>
                 <template v-else>{{ booked(s) }} booked</template>
+              </p>
+              <p v-if="s.seriesId && series[s.seriesId]" class="mt-0.5 text-[0.6875rem] text-faint tnum">
+                Series {{ series[s.seriesId].completed }}/{{ series[s.seriesId].planned }} done<template v-if="series[s.seriesId].cancelled"> · {{ series[s.seriesId].cancelled }} cancelled</template>
               </p>
               <p v-if="needsAttendance(s)" class="mt-0.5 flex items-center gap-1 text-xs font-medium text-partial">
                 <TriangleAlert class="h-3 w-3" /> Attendance needed

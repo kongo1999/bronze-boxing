@@ -19,6 +19,10 @@ import (
 	"bronzeboxing/internal/models"
 )
 
+// clockNow is "now" for rules that compare against the wall clock (e.g. no
+// attendance on a class that hasn't started). Tests pin it.
+var clockNow = time.Now
+
 // reqCtx returns a request-scoped context with a generous timeout for Mongo ops.
 func reqCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
