@@ -297,7 +297,7 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
                 <button
                   v-if="s.chargeId"
                   type="button"
-                  class="grid h-10 w-9 shrink-0 place-items-center rounded-lg text-faint hover:bg-elevated hover:text-fg"
+                  class="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-faint hover:bg-elevated hover:text-fg"
                   :aria-label="`More for ${s.trainee.name}`"
                   :aria-expanded="openActions === s.trainee.id"
                   @click="openActions = openActions === s.trainee.id ? undefined : s.trainee.id"

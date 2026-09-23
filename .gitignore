@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local database backups
 /backups/
+
+# Playwright
+/frontend/test-results/
+/frontend/playwright-report/
