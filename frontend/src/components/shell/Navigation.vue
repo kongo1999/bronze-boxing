@@ -85,6 +85,7 @@ const rightTabs = computed(() => tabs.slice(2));
 <template>
   <!-- Mobile top bar with hamburger -->
   <header
+    data-print-hide
     class="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b border-line bg-surface/95 px-2 backdrop-blur md:hidden"
   >
     <button
@@ -110,6 +111,7 @@ const rightTabs = computed(() => tabs.slice(2));
 
   <!-- Desktop side rail -->
   <aside
+    data-print-hide
     class="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-line bg-surface px-4 py-6 md:flex"
   >
     <RouterLink to="/" class="mb-8 flex items-center gap-2 px-2">
@@ -136,6 +138,7 @@ const rightTabs = computed(() => tabs.slice(2));
 
   <!-- Mobile bottom nav -->
   <nav
+    data-print-hide
     class="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur md:hidden"
   >
     <div

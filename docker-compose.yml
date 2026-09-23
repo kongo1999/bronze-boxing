@@ -67,6 +67,9 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       STUDIO_TZ: ${STUDIO_TZ:-Asia/Beirut}
+      STUDIO_NAME: ${STUDIO_NAME:-Bronze Boxing Club}
+      STUDIO_ADDRESS: ${STUDIO_ADDRESS:-}
+      STUDIO_PHONE: ${STUDIO_PHONE:-}
     depends_on:
       mongo:
         condition: service_healthy

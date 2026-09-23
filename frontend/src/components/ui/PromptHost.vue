@@ -9,9 +9,16 @@ import { btnClasses } from "./button";
 
 const s = usePromptState();
 const field = ref<HTMLTextAreaElement>();
+const amountField = ref<HTMLInputElement>();
 let returnFocus: HTMLElement | null = null;
 
-const canConfirm = computed(() => !s.required || s.value.trim().length > 0);
+const amountOk = computed(() => {
+  const a = s.amount;
+  if (!a) return true;
+  const v = Number(s.amountValue);
+  return Number.isFinite(v) && v >= (a.min ?? 0) && (a.max === undefined || v <= a.max);
+});
+const canConfirm = computed(() => (!s.required || s.value.trim().length > 0) && amountOk.value);
 
 watch(
   () => s.open,
@@ -19,7 +26,8 @@ watch(
     if (open) {
       returnFocus = document.activeElement as HTMLElement | null;
       await nextTick();
-      field.value?.focus();
+      if (s.amount) amountField.value?.focus();
+      else field.value?.focus();
     } else {
       returnFocus?.focus?.();
       returnFocus = null;
@@ -54,6 +62,21 @@ function onKey(e: KeyboardEvent) {
         <h2 id="prompt-title" class="font-display text-lg font-semibold">{{ s.title }}</h2>
         <p v-if="s.message" class="mt-1 text-sm text-muted">{{ s.message }}</p>
       </div>
+      <label v-if="s.amount" class="block">
+        <span class="mb-1 block text-xs text-faint">{{ s.amount.label }}</span>
+        <input
+          ref="amountField"
+          v-model.number="s.amountValue"
+          type="number"
+          inputmode="decimal"
+          step="0.01"
+          :min="s.amount.min ?? 0"
+          :max="s.amount.max"
+          :class="inputCls"
+          :aria-invalid="!amountOk"
+        />
+        <span v-if="s.amount.hint" class="mt-1 block text-xs" :class="amountOk ? 'text-faint' : 'text-overdue'">{{ s.amount.hint }}</span>
+      </label>
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Reason{{ s.required ? "" : " (optional)" }}</span>
         <textarea

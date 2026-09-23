@@ -4,10 +4,12 @@ import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft } from "lucide-vue-next";
 import { api, errMsg, isApiError } from "@/lib/api";
 import { invalidate } from "@/lib/cache";
-import type { Trainee, SubStatus } from "@/lib/types";
-import { money, monthLabel } from "@/lib/format";
+import type { Trainee, SubStatus, Payment } from "@/lib/types";
+import { money, monthLabel, formatLongDate } from "@/lib/format";
+import { METHODS, methodLabel } from "@/lib/labels";
+import ChipGroup from "@/components/ui/ChipGroup.vue";
 import { currentMonth, formatDay, isDayKey, isMonthKey, todayKey } from "@/lib/studio";
-import { backTarget } from "@/lib/route-state";
+import { backTarget, withQuery } from "@/lib/route-state";
 import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
@@ -33,6 +35,8 @@ const form = reactive({
   type: typeof q.type === "string" ? q.type : "subscription",
   periodMonth: isMonthKey(q.periodMonth) ? q.periodMonth : viewingMonth,
   day: isDayKey(q.day) ? q.day : todayKey(),
+  method: "cash",
+  reference: "",
   note: "",
 });
 
@@ -54,16 +58,24 @@ const traineeOptions = computed(() =>
 // (the server enforces the same rule; this is the friendly first line).
 const dueInfo = ref<SubStatus | null>(null);
 const dueLoaded = ref(false);
+// What has already been paid toward this trainee's period (any cash date),
+// shown before saving so a second payment is a deliberate one.
+const existing = ref<Payment[]>([]);
 let dueToken = 0;
 async function loadDue() {
   const my = ++dueToken;
   dueInfo.value = null;
   dueLoaded.value = false;
+  existing.value = [];
   if (form.type !== "subscription" || !form.trainee || !isMonthKey(form.periodMonth)) return;
   try {
-    const subs = await api.get<SubStatus[]>(`/subscriptions?m=${form.periodMonth}`);
+    const [subs, pays] = await Promise.all([
+      api.get<SubStatus[]>(`/subscriptions?m=${form.periodMonth}`),
+      api.get<Payment[]>(`/payments?trainee=${form.trainee}&periodMonth=${form.periodMonth}&type=subscription`),
+    ]);
     if (my !== dueToken) return;
     dueInfo.value = subs.find((x) => x.trainee.id === form.trainee) ?? null;
+    existing.value = pays;
     dueLoaded.value = true;
   } catch {
     /* helper line only — the server still validates */
@@ -89,10 +101,16 @@ async function submit() {
       type: form.type,
       periodMonth: form.type === "subscription" ? form.periodMonth : "",
       day: form.day,
+      method: form.method,
+      reference: form.method === "cash" ? "" : form.reference,
       note: form.note,
     });
     invalidate("payments", "dues", "subs", "financials", "dashboard", "trainees");
-    router.push(backTarget(route.query, `/payments?m=${form.type === "subscription" ? form.periodMonth : cashMonth.value}`));
+    // Back to where Collect was tapped, with that trainee's row shown and
+    // highlighted so the new balance is visible at a glance.
+    const target = backTarget(route.query, `/payments?m=${form.type === "subscription" ? form.periodMonth : cashMonth.value}`);
+    const onMoney = target === "/payments" || target.startsWith("/payments?");
+    router.push(form.type === "subscription" && form.trainee && onMoney ? withQuery(target, "focus", form.trainee) : target);
   } catch (e) {
     saving.value = false;
     if (isApiError(e) && e.field) fieldErr.value = { [e.field]: e.message };
@@ -163,6 +181,23 @@ async function submit() {
         <template v-else-if="dueLoaded">No dues are recorded for {{ monthLabel(form.periodMonth) }} — log it as another type, or set a monthly fee first.</template>
         <template v-else>Checking {{ monthLabel(form.periodMonth) }}'s dues…</template>
       </div>
+
+      <ul v-if="existing.length" class="space-y-1 rounded-xl border border-line px-3 py-2 text-xs text-muted" aria-label="Already paid toward this period">
+        <li class="label-eyebrow text-[0.6rem] text-faint">Already paid toward {{ monthLabel(form.periodMonth) }}</li>
+        <li v-for="x in existing" :key="x.id" class="flex justify-between gap-2" :class="x.voidedAt ? 'line-through opacity-60' : ''">
+          <span>{{ formatLongDate(x.date) }} · {{ methodLabel(x.method) }}<template v-if="x.voidedAt"> · void</template></span>
+          <span class="tnum">{{ money(x.amount) }}</span>
+        </li>
+      </ul>
+
+      <div>
+        <span class="mb-1 block text-xs text-faint">Paid by</span>
+        <ChipGroup v-model="form.method" :options="METHODS.map((m) => ({ v: m.v, l: m.l }))" label="Payment method" />
+      </div>
+      <label v-if="form.method !== 'cash'" class="block">
+        <span class="mb-1 block text-xs text-faint">Reference <span class="text-faint/70">(optional — slip or transfer number)</span></span>
+        <input v-model="form.reference" :class="inputCls" maxlength="120" />
+      </label>
 
       <label class="block">
         <span class="mb-1 block text-xs text-faint">Note</span>

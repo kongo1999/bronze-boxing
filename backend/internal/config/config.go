@@ -21,6 +21,10 @@ type Config struct {
 	SkipMigrationCheck bool
 	// Quiet disables per-request logging (tests).
 	Quiet bool
+	// Studio identity printed on receipts.
+	StudioName    string
+	StudioAddress string
+	StudioPhone   string
 }
 
 func Load() Config {
@@ -39,6 +43,9 @@ func Load() Config {
 		Timezone:           env("STUDIO_TZ", "Asia/Beirut"),
 		AllowStandalone:    env("MONGO_ALLOW_STANDALONE", "") == "true",
 		SkipMigrationCheck: env("SKIP_MIGRATION_CHECK", "") == "true",
+		StudioName:         env("STUDIO_NAME", "Bronze Boxing Club"),
+		StudioAddress:      env("STUDIO_ADDRESS", ""),
+		StudioPhone:        env("STUDIO_PHONE", ""),
 	}
 }
 

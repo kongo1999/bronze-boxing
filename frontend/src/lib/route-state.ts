@@ -21,10 +21,7 @@ export function useQueryState<T extends string = string>(
   const state = ref(read()) as Ref<T>;
   watch(state, (v) => {
     if (route.query[name] === v) return;
-    const query = { ...route.query };
-    if (v === fallback()) delete query[name];
-    else query[name] = v;
-    router.replace({ query });
+    queueQuery(router, route, name, v === fallback() ? undefined : v);
   });
   // Browser back/forward (or a link) changed the URL: follow it.
   watch(
@@ -35,6 +32,42 @@ export function useQueryState<T extends string = string>(
     },
   );
   return state;
+}
+
+// Several params often change in the same tick (tapping a category sets both
+// ?kind= and ?type=). Separate replace() calls would each start from the old
+// query and the last would drop the others, so changes are merged and
+// applied as one navigation per tick.
+let pending: Record<string, string | undefined> | null = null;
+function queueQuery(
+  router: ReturnType<typeof useRouter>,
+  route: ReturnType<typeof useRoute>,
+  key: string,
+  value: string | undefined,
+): void {
+  if (!pending) {
+    pending = {};
+    queueMicrotask(() => {
+      const changes = pending ?? {};
+      pending = null;
+      const query = { ...route.query };
+      for (const [k, v] of Object.entries(changes)) {
+        if (v === undefined) delete query[k];
+        else query[k] = v;
+      }
+      router.replace({ query });
+    });
+  }
+  pending[key] = value;
+}
+
+/** Change query params (undefined removes one) merged with any pending changes. */
+export function usePatchQuery() {
+  const router = useRouter();
+  const route = useRoute();
+  return (changes: Record<string, string | undefined>) => {
+    for (const [k, v] of Object.entries(changes)) queueQuery(router, route, k, v);
+  };
 }
 
 /** Is this a safe in-app path to return to (not an external URL)? */
@@ -54,4 +87,12 @@ export function withBack(path: string, back: string, extra: Record<string, strin
   for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== "") query[k] = v;
   query.back = back;
   return { path: p, query };
+}
+
+/** Set one query parameter on an in-app path, keeping the rest. */
+export function withQuery(path: string, key: string, value: string): string {
+  const [p, q = ""] = path.split("?");
+  const params = new URLSearchParams(q);
+  params.set(key, value);
+  return `${p}?${params.toString()}`;
 }

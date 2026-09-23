@@ -43,6 +43,18 @@ func registerPayments(r fiber.Router, store *db.Store) {
 // legacy mirrors of shop sales; new shop income goes through Inventory.
 var recordablePayTypes = []string{models.PaySubscription, models.PayPrivate, models.PayDropin, models.PayOther}
 
+var payMethods = []string{models.MethodCash, models.MethodCard, models.MethodTransfer, models.MethodOther}
+
+// studioInfo is the identity printed on receipts (set from config in New).
+type studioInfo struct {
+	Name     string `json:"name"`
+	Address  string `json:"address,omitempty"`
+	Phone    string `json:"phone,omitempty"`
+	Currency string `json:"currency"`
+}
+
+var studio = studioInfo{Name: "Bronze Boxing Club", Currency: "$"}
+
 type paymentInput struct {
 	Trainee     string     `json:"trainee"`
 	Amount      float64    `json:"amount"`
@@ -51,9 +63,11 @@ type paymentInput struct {
 	Date        *time.Time `json:"date"`
 	// Day records the cash date as a studio-local YYYY-MM-DD: today means
 	// "now", another day means midday that day. Ignored when Date is sent.
-	Day    string `json:"day"`
-	Note   string `json:"note"`
-	Reason string `json:"reason"` // required when a correction changes the amount
+	Day       string `json:"day"`
+	Note      string `json:"note"`
+	Method    string `json:"method"`    // cash | card | bank_transfer | other
+	Reference string `json:"reference"` // optional slip / transfer reference
+	Reason    string `json:"reason"`    // required when a correction changes the amount
 }
 
 // resolveRecordDate turns the optional date/day inputs into the instant the
@@ -78,14 +92,21 @@ func resolveRecordDate(date *time.Time, day string) (time.Time, error) {
 	return start.Add(12 * time.Hour), nil
 }
 
+// list returns payments by cash date (?m= or ?from=&to=), optionally narrowed
+// to one trainee, one dues period (?periodMonth=, any cash date) and a type.
+// With ?limit= the response is a page {items, total, hasMore}; without it,
+// the original plain array.
 func (h *paymentHandler) list(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
-	from, to, err := monthOrRange(c)
-	if err != nil {
-		return err
+	filter := bson.M{}
+	if c.Query("m") != "" || c.Query("from") != "" || c.Query("to") != "" {
+		from, to, err := monthOrRange(c)
+		if err != nil {
+			return err
+		}
+		filter["date"] = bson.M{"$gte": from, "$lt": to}
 	}
-	filter := bson.M{"date": bson.M{"$gte": from, "$lt": to}}
 	if t := c.Query("trainee"); t != "" {
 		tid, err := parseOID(t, "trainee")
 		if err != nil {
@@ -93,16 +114,20 @@ func (h *paymentHandler) list(c *fiber.Ctx) error {
 		}
 		filter["trainee"] = tid
 	}
-	cur, err := h.store.Coll(models.CollPayments).Find(ctx, filter,
-		options.Find().SetSort(bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}}))
-	if err != nil {
-		return err
+	if pm := c.Query("periodMonth"); pm != "" {
+		if !models.ValidMonth(pm) {
+			return badField("periodMonth", "periodMonth must be YYYY-MM")
+		}
+		filter["periodMonth"] = pm
 	}
-	out := []models.Payment{}
-	if err := cur.All(ctx, &out); err != nil {
-		return err
+	if typ := c.Query("type"); typ != "" {
+		filter["type"] = typ
 	}
-	return c.JSON(out)
+	if len(filter) == 0 && c.Query("limit") == "" {
+		return badField("m", "give a month, a date range, a trainee or a period (or page with limit)")
+	}
+	return pagedFind[models.Payment](c, ctx, h.store.Coll(models.CollPayments), filter,
+		bson.D{{Key: "date", Value: -1}, {Key: "_id", Value: -1}})
 }
 
 func (h *paymentHandler) get(c *fiber.Ctx) error {
@@ -148,6 +173,16 @@ func (h *paymentHandler) normalizePayment(ctx context.Context, in paymentInput, 
 		return p, nil, err
 	}
 	p.Amount, p.Type, p.Note = amount, typ, strings.TrimSpace(in.Note)
+	if in.Method != "" {
+		if err := oneOf("method", in.Method, payMethods...); err != nil {
+			return p, nil, err
+		}
+	}
+	p.Method = in.Method
+	p.Reference = strings.TrimSpace(in.Reference)
+	if len(p.Reference) > 120 {
+		return p, nil, badField("reference", "reference must be at most 120 characters")
+	}
 	var trainee *models.Trainee
 	if in.Trainee != "" {
 		t, err := loadTrainee(ctx, h.store, in.Trainee, "trainee")
@@ -302,6 +337,7 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 		set := bson.M{
 			"amount": next.Amount, "type": next.Type, "periodMonth": next.PeriodMonth,
 			"note": next.Note, "date": next.Date, "trainee": next.Trainee, "traineeName": next.TraineeName,
+			"method": next.Method, "reference": next.Reference,
 		}
 		res, err := h.store.Coll(models.CollPayments).UpdateOne(tx, bson.M{"_id": id, "voidedAt": nil}, bson.M{"$set": set})
 		if err != nil {
@@ -401,11 +437,18 @@ func (h *paymentHandler) receipt(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// Receipt number: stable, short, derived from the payment id.
+	number := strings.ToUpper(p.ID.Hex()[len(p.ID.Hex())-8:])
 	out := fiber.Map{
-		"studio":  "Bronze Boxing",
-		"payment": p,
-		"issued":  time.Now().UTC(),
-		"void":    p.VoidedAt != nil,
+		"studio":     studio.Name, // legacy string field
+		"studioInfo": studio,
+		"number":     number,
+		"payment":    p,
+		"issued":     time.Now().UTC(),
+		"void":       p.VoidedAt != nil,
+		"method":     defaultStr(p.Method, "unspecified"),
+		"cashDay":    models.DateKey(p.Date),
+		"timezone":   time.Local.String(),
 	}
 	if p.Type == models.PaySubscription && p.Trainee != nil && p.PeriodMonth != "" {
 		var ch models.SubscriptionCharge
@@ -435,7 +478,7 @@ func (h *paymentHandler) export(c *fiber.Ctx) error {
 	}
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Note", "Status", "Void reason"})
+	_ = w.Write([]string{"Date", "Trainee", "Type", "Period", "Amount", "Method", "Reference", "Note", "Status", "Void reason"})
 	for _, p := range payments {
 		status := ""
 		if p.VoidedAt != nil {
@@ -447,6 +490,8 @@ func (h *paymentHandler) export(c *fiber.Ctx) error {
 			p.Type,
 			p.PeriodMonth,
 			strconv.FormatFloat(p.Amount, 'f', 2, 64),
+			defaultStr(p.Method, "unspecified"),
+			p.Reference,
 			p.Note,
 			status,
 			p.VoidReason,

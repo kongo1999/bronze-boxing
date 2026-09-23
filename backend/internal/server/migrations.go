@@ -23,6 +23,7 @@ func Migrations() []migrate.Migration {
 		{ID: "2026-09-002-stock-ledger-opening", Description: "Open each item's stock ledger with its current stock", Up: migrateStockOpening},
 		{ID: "2026-09-003-subscription-terms-charges", Description: "Membership terms from current trainee records; monthly charges from existing dues", Up: migrateTermsAndCharges},
 		{ID: "2026-09-004-reminder-due-day", Description: "Store each reminder's studio-local due day", Up: migrateReminderDueDay},
+		{ID: "2026-09-005-closings-returns-indexes", Description: "Indexes for daily cash counts and sale returns", Up: migrateClosingsReturnsIndexes},
 	}
 }
 
@@ -72,6 +73,21 @@ func migrateCoreIndexes(ctx context.Context, r *migrate.Runner) (migrate.Result,
 	sort.Strings(names)
 	for _, coll := range names {
 		n, err := r.EnsureIndexes(ctx, coll, specs[coll])
+		if err != nil {
+			return res, err
+		}
+		res.Add("indexes", n)
+	}
+	return res, nil
+}
+
+func migrateClosingsReturnsIndexes(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {
+	res := migrate.Result{}
+	for coll, models_ := range map[string][]mongo.IndexModel{
+		models.CollClosings: {idx(bson.D{{Key: "day", Value: 1}}, true)},
+		models.CollReturns:  {idx(bson.D{{Key: "sale", Value: 1}}, false), idx(bson.D{{Key: "date", Value: 1}}, false)},
+	} {
+		n, err := r.EnsureIndexes(ctx, coll, models_)
 		if err != nil {
 			return res, err
 		}

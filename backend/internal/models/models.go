@@ -32,6 +32,13 @@ const (
 	PaySale         = "sale"
 	PayOther        = "other"
 
+	// How money was received. Payments recorded before methods existed have
+	// none and read as "unspecified".
+	MethodCash     = "cash"
+	MethodCard     = "card"
+	MethodTransfer = "bank_transfer"
+	MethodOther    = "other"
+
 	ExpRent      = "rent"
 	ExpEquipment = "equipment"
 	ExpUtilities = "utilities"
@@ -85,6 +92,8 @@ const (
 	CollMovements    = "stock_movements"
 	CollTerms        = "subscription_terms"
 	CollCharges      = "subscription_charges"
+	CollClosings     = "cash_closings"
+	CollReturns      = "sale_returns"
 )
 
 // User is a staff login account. The admin account is bootstrapped from
@@ -157,6 +166,8 @@ type Payment struct {
 	PeriodMonth string              `bson:"periodMonth,omitempty" json:"periodMonth,omitempty"`
 	Date        time.Time           `bson:"date" json:"date"`
 	Note        string              `bson:"note,omitempty" json:"note,omitempty"`
+	Method      string              `bson:"method,omitempty" json:"method,omitempty"`       // cash | card | bank_transfer | other
+	Reference   string              `bson:"reference,omitempty" json:"reference,omitempty"` // card slip / transfer ref
 	SaleID      *primitive.ObjectID `bson:"saleId,omitempty" json:"saleId,omitempty"`
 	CreatedAt   time.Time           `bson:"createdAt" json:"createdAt"`
 	CreatedBy   string              `bson:"createdBy,omitempty" json:"createdBy,omitempty"`
@@ -232,6 +243,7 @@ type Sale struct {
 	// differs (a discount or override), PriceReason says why.
 	ListPrice   float64 `bson:"listPrice,omitempty" json:"listPrice,omitempty"`
 	PriceReason string  `bson:"priceReason,omitempty" json:"priceReason,omitempty"`
+	Method      string  `bson:"method,omitempty" json:"method,omitempty"` // how the buyer paid; cash when unset
 	Total       float64 `bson:"total" json:"total"`
 	// Running totals of live partial returns against this sale. The sale
 	// itself is never rewritten by a return; returns are their own records.
@@ -320,4 +332,33 @@ type SubscriptionCharge struct {
 	Source      string             `bson:"source" json:"source"`
 	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time          `bson:"updatedAt" json:"updatedAt"`
+}
+
+// CashClosing is the cash the owner counted in the till at the end of a
+// studio day, compared against the cash the books say came in.
+type CashClosing struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Day          string             `bson:"day" json:"day"` // studio-local YYYY-MM-DD, unique
+	CountedCents int64              `bson:"countedCents" json:"-"`
+	Note         string             `bson:"note,omitempty" json:"note,omitempty"`
+	Actor        string             `bson:"actor,omitempty" json:"actor,omitempty"`
+	CreatedAt    time.Time          `bson:"createdAt" json:"createdAt"`
+	UpdatedAt    time.Time          `bson:"updatedAt" json:"updatedAt"`
+}
+
+// SaleReturn is units of a sale coming back, with the money refunded. The
+// sale itself is not rewritten: a return is its own record, dated when the
+// refund happened, so it lands in that month's cash. A return only counts
+// while its sale is live — voiding the sale voids the whole transaction.
+type SaleReturn struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Sale      primitive.ObjectID `bson:"sale" json:"sale"`
+	Item      primitive.ObjectID `bson:"item" json:"item"`
+	ItemName  string             `bson:"itemName" json:"itemName"`
+	Qty       int                `bson:"qty" json:"qty"`
+	Amount    float64            `bson:"amount" json:"amount"` // refunded
+	Date      time.Time          `bson:"date" json:"date"`
+	Reason    string             `bson:"reason" json:"reason"`
+	CreatedAt time.Time          `bson:"createdAt" json:"createdAt"`
+	Actor     string             `bson:"actor,omitempty" json:"actor,omitempty"`
 }

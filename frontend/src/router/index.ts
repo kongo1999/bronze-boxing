@@ -18,12 +18,15 @@ const routes = [
 
   { path: "/payments", name: "payments", component: () => import("@/views/PaymentsView.vue") },
   { path: "/payments/new", name: "payment-new", component: () => import("@/views/PaymentFormView.vue") },
+  { path: "/payments/:id", name: "payment-detail", component: () => import("@/views/PaymentDetailView.vue") },
+  { path: "/payments/:id/receipt", name: "payment-receipt", component: () => import("@/views/ReceiptView.vue") },
 
   { path: "/reminders", name: "reminders", component: () => import("@/views/RemindersView.vue") },
   { path: "/reminders/new", name: "reminder-new", component: () => import("@/views/ReminderFormView.vue") },
   { path: "/reminders/:id/edit", name: "reminder-edit", component: () => import("@/views/ReminderFormView.vue") },
 
   { path: "/financials", name: "financials", component: () => import("@/views/FinancialsView.vue") },
+  { path: "/financials/reconcile", name: "reconcile", component: () => import("@/views/ReconcileView.vue") },
   { path: "/inventory", name: "inventory", component: () => import("@/views/InventoryView.vue") },
   { path: "/sales/:id", name: "sale-detail", component: () => import("@/views/SaleDetailView.vue") },
   { path: "/search", name: "search", component: () => import("@/views/SearchView.vue") },
@@ -34,7 +37,8 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
-  scrollBehavior: () => ({ top: 0 }),
+  // Back/forward restores where the list was scrolled; new pages start at the top.
+  scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
 });
 
 // Login gate: only when the API actually requires a token (API_TOKEN set on

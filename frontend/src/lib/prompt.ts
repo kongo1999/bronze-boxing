@@ -17,15 +17,18 @@ export interface PromptOptions {
   /** When false the text may be left empty (a plain confirm with a note). */
   required?: boolean;
   initial?: string;
+  /** Also ask for an amount (e.g. a corrected amount due). */
+  amount?: { label: string; initial: number; min?: number; max?: number; hint?: string };
 }
 
 interface PromptState extends PromptOptions {
   open: boolean;
   value: string;
+  amountValue: number;
   resolve?: (v: string | null) => void;
 }
 
-const state = reactive<PromptState>({ open: false, title: "", value: "" });
+const state = reactive<PromptState>({ open: false, title: "", value: "", amountValue: 0 });
 
 export function usePromptState() {
   return state;
@@ -43,12 +46,23 @@ export function askReason(opts: PromptOptions): Promise<string | null> {
       tone: "danger",
       required: true,
       initial: "",
+      amount: undefined,
       ...opts,
       open: true,
       value: opts.initial ?? "",
+      amountValue: opts.amount?.initial ?? 0,
       resolve,
     });
   });
+}
+
+/** Ask for an amount and a reason together; null if cancelled. */
+export async function askAmountAndReason(
+  opts: PromptOptions & { amount: NonNullable<PromptOptions["amount"]> },
+): Promise<{ amount: number; reason: string } | null> {
+  const reason = await askReason(opts);
+  if (reason === null) return null;
+  return { amount: Math.round(state.amountValue * 100) / 100, reason };
 }
 
 export function settlePrompt(value: string | null): void {

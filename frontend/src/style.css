@@ -118,3 +118,27 @@
     animation: none;
   }
 }
+
+/* Print (receipts, the monthly report): paper colours, no app chrome. */
+@media print {
+  body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+  [data-print-hide] {
+    display: none !important;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  .receipt,
+  .print-sheet {
+    box-shadow: none !important;
+    border: 1px solid #bbb;
+  }
+  .print-sheet {
+    background: #fff !important;
+    color: #111 !important;
+  }
+}

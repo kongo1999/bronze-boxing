@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"bronzeboxing/internal/db"
 	"bronzeboxing/internal/models"
@@ -215,4 +216,47 @@ func traineeNames(ctx context.Context, store *db.Store, ids []primitive.ObjectID
 // isDup reports a unique-index violation.
 func isDup(err error) bool {
 	return mongo.IsDuplicateKeyError(err)
+}
+
+// page is the paged-list response shape: the items of this page plus enough
+// to render "1–20 of 134" and a "more" control.
+type page[T any] struct {
+	Items   []T   `json:"items"`
+	Total   int64 `json:"total"`
+	HasMore bool  `json:"hasMore"`
+	Offset  int   `json:"offset"`
+	Limit   int   `json:"limit"`
+}
+
+// pagedFind runs a sorted find. With ?limit= (and optional ?offset=) it
+// answers with a page; without, with the original plain array so older
+// clients keep working.
+func pagedFind[T any](c *fiber.Ctx, ctx context.Context, coll *mongo.Collection, filter bson.M, sort bson.D) error {
+	opts := options.Find().SetSort(sort)
+	if c.Query("limit") == "" {
+		cur, err := coll.Find(ctx, filter, opts)
+		if err != nil {
+			return err
+		}
+		out := []T{}
+		if err := cur.All(ctx, &out); err != nil {
+			return err
+		}
+		return c.JSON(out)
+	}
+	limit := min(max(atoiDefault(c.Query("limit"), 20), 1), 200)
+	offset := max(atoiDefault(c.Query("offset"), 0), 0)
+	total, err := coll.CountDocuments(ctx, filter)
+	if err != nil {
+		return err
+	}
+	cur, err := coll.Find(ctx, filter, opts.SetSkip(int64(offset)).SetLimit(int64(limit)))
+	if err != nil {
+		return err
+	}
+	items := []T{}
+	if err := cur.All(ctx, &items); err != nil {
+		return err
+	}
+	return c.JSON(page[T]{Items: items, Total: total, HasMore: int64(offset+len(items)) < total, Offset: offset, Limit: limit})
 }

@@ -1,14 +1,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"errors"
-	"fmt"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,8 +27,6 @@ func registerExpenses(r fiber.Router, store *db.Store) {
 	g.Put("/:id", h.update)
 	g.Post("/:id/void", h.voidPost)
 	g.Delete("/:id", h.remove)
-	r.Get("/financials", h.financials)
-	r.Get("/financials/export", h.statement)
 }
 
 var expenseCategories = []string{
@@ -238,173 +231,4 @@ func (h *expenseHandler) doVoid(c *fiber.Ctx, rawReason string) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"ok": true, "voided": true})
-}
-
-// ledgerRows loads the period's payments, expenses and sales (live only, or
-// with voided rows too) — the single source both the financials summary and
-// the statement export compute from, so the two can never disagree.
-func ledgerRows(ctx context.Context, store *db.Store, from, to time.Time, includeVoided bool) ([]models.Payment, []models.Expense, []models.Sale, error) {
-	dateFilter := func() bson.M {
-		f := bson.M{"date": bson.M{"$gte": from, "$lt": to}}
-		if !includeVoided {
-			f = notVoided(f)
-		}
-		return f
-	}
-	sortAsc := options.Find().SetSort(bson.D{{Key: "date", Value: 1}, {Key: "_id", Value: 1}})
-	pcur, err := store.Coll(models.CollPayments).Find(ctx, dateFilter(), sortAsc)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var payments []models.Payment
-	if err := pcur.All(ctx, &payments); err != nil {
-		return nil, nil, nil, err
-	}
-	ecur, err := store.Coll(models.CollExpenses).Find(ctx, dateFilter(), sortAsc)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var expenses []models.Expense
-	if err := ecur.All(ctx, &expenses); err != nil {
-		return nil, nil, nil, err
-	}
-	scur, err := store.Coll(models.CollSales).Find(ctx, dateFilter(), sortAsc)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var sales []models.Sale
-	if err := scur.All(ctx, &sales); err != nil {
-		return nil, nil, nil, err
-	}
-	return payments, expenses, sales, nil
-}
-
-// financials reports cash in (payments + shop sales) vs recorded cash out
-// (expenses) for a period, with breakdowns by payment type and expense
-// category. Voided records never count.
-func (h *expenseHandler) financials(c *fiber.Ctx) error {
-	ctx, cancel := reqCtx()
-	defer cancel()
-	from, to, err := monthOrRange(c)
-	if err != nil {
-		return err
-	}
-
-	payments, expenses, sales, err := ledgerRows(ctx, h.store, from, to, false)
-	if err != nil {
-		return err
-	}
-
-	var income, outgoings int64
-	byType := map[string]int64{}
-	for _, p := range payments {
-		income += models.Cents(p.Amount)
-		byType[p.Type] += models.Cents(p.Amount)
-	}
-	// Inventory sales are shop income too (skip any legacy sale already
-	// mirrored as a payment to avoid double-count).
-	for _, s := range sales {
-		if s.PaymentID == nil {
-			income += models.Cents(s.Total)
-			byType[models.PaySale] += models.Cents(s.Total)
-		}
-	}
-	byCategory := map[string]int64{}
-	for _, e := range expenses {
-		outgoings += models.Cents(e.Amount)
-		byCategory[e.Category] += models.Cents(e.Amount)
-	}
-	return c.JSON(fiber.Map{
-		"income":     models.Amount(income),
-		"outgoings":  models.Amount(outgoings),
-		"net":        models.Amount(income - outgoings),
-		"byType":     centsMap(byType),
-		"byCategory": centsMap(byCategory),
-		"from":       from,
-		"to":         to,
-	})
-}
-
-func centsMap(m map[string]int64) map[string]float64 {
-	out := make(map[string]float64, len(m))
-	for k, v := range m {
-		out[k] = models.Amount(v)
-	}
-	return out
-}
-
-// statement exports the full period ledger as CSV: every payment, sale and
-// expense in date order (voided rows included, marked VOID and excluded from
-// the totals), followed by income / outgoings / net summary lines.
-func (h *expenseHandler) statement(c *fiber.Ctx) error {
-	ctx, cancel := reqCtx()
-	defer cancel()
-	from, to, err := monthOrRange(c)
-	if err != nil {
-		return err
-	}
-
-	payments, expenses, sales, err := ledgerRows(ctx, h.store, from, to, true)
-	if err != nil {
-		return err
-	}
-
-	type row struct {
-		date         time.Time
-		kind, detail string
-		typ, note    string
-		in, out      int64
-		voided       bool
-	}
-	rows := make([]row, 0, len(payments)+len(expenses)+len(sales))
-	for _, p := range payments {
-		rows = append(rows, row{p.Date, "payment", p.TraineeName, p.Type, p.Note, models.Cents(p.Amount), 0, p.VoidedAt != nil})
-	}
-	for _, s := range sales {
-		if s.PaymentID != nil {
-			continue // legacy mirror: already present as a payment row
-		}
-		detail := s.ItemName
-		if s.TraineeName != "" {
-			detail += " → " + s.TraineeName
-		}
-		rows = append(rows, row{s.Date, "sale", detail, "sale", "", models.Cents(s.Total), 0, s.VoidedAt != nil})
-	}
-	for _, e := range expenses {
-		rows = append(rows, row{e.Date, "expense", e.Category, "expense", e.Note, 0, models.Cents(e.Amount), e.VoidedAt != nil})
-	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].date.Before(rows[j].date) })
-
-	cents := func(v int64) string { return strconv.FormatFloat(models.Amount(v), 'f', 2, 64) }
-	var income, outgoings int64
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-	_ = w.Write([]string{"Date", "Kind", "Detail", "Type", "Note", "In", "Out", "Status"})
-	for _, r := range rows {
-		status := ""
-		if r.voided {
-			status = "VOID"
-		} else {
-			income += r.in
-			outgoings += r.out
-		}
-		_ = w.Write([]string{
-			r.date.In(time.Local).Format("2006-01-02 15:04"),
-			r.kind, r.detail, r.typ, r.note,
-			cents(r.in), cents(r.out), status,
-		})
-	}
-	_ = w.Write([]string{})
-	_ = w.Write([]string{"", "", "", "", "Total income", cents(income), "", ""})
-	_ = w.Write([]string{"", "", "", "", "Total outgoings", "", cents(outgoings), ""})
-	_ = w.Write([]string{"", "", "", "", "Net cash", cents(income - outgoings), "", ""})
-	w.Flush()
-
-	label := c.Query("m")
-	if label == "" {
-		label = models.DateKey(from) + "_" + models.DateKey(to)
-	}
-	c.Set("Content-Type", "text/csv")
-	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=statement-%s.csv", label))
-	return c.Send(buf.Bytes())
 }

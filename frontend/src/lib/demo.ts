@@ -8,7 +8,7 @@
 
 import type {
   Trainee, Session, Payment, Reminder, Expense, InventoryItem, Sale,
-  SubStatus, Dashboard, Financials, SearchResults, Attendee, AuditEntry,
+  SubStatus, Dashboard, Financials, SearchResults, Attendee, AuditEntry, LedgerRow,
 } from "./types";
 
 // Demo on in production unless explicitly disabled; off in dev unless forced.
@@ -170,7 +170,22 @@ function financials(): Financials {
   let outgoings = 0;
   const byCategory: Record<string, number> = {};
   for (const e of live(expenses)) { outgoings += e.amount; byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount; }
-  return { income, outgoings, net: income - outgoings, byType, byCategory, from: iso(-now.getDate() + 1, 0), to: iso(31, 0) };
+  const byMethod: Record<string, number> = {};
+  for (const p of live(payments)) byMethod[p.method ?? "unspecified"] = (byMethod[p.method ?? "unspecified"] ?? 0) + p.amount;
+  for (const s of live(sales)) if (!s.paymentId) byMethod.cash = (byMethod.cash ?? 0) + s.total;
+  return {
+    income, outgoings, net: income - outgoings, byType, byCategory, byMethod,
+    counts: { payment: live(payments).length, sale: live(sales).length, expense: live(expenses).length },
+    from: iso(-now.getDate() + 1, 0), to: iso(31, 0),
+    previous: { income: 0, outgoings: 0, net: 0, from: iso(-now.getDate() - 30, 0), to: iso(-now.getDate() + 1, 0) },
+  };
+}
+function ledgerRows(): LedgerRow[] {
+  const rows: LedgerRow[] = [];
+  for (const p of payments) rows.push({ kind: "payment", id: p.id, date: p.date, day: p.date.slice(0, 10), detail: p.traineeName ?? "—", type: p.type, method: p.method, reference: p.reference, periodMonth: p.periodMonth, trainee: p.trainee, note: p.note, in: p.amount, out: 0, voided: !!p.voidedAt, voidReason: p.voidReason });
+  for (const s of sales) if (!s.paymentId) rows.push({ kind: "sale", id: s.id, date: s.date, day: s.date.slice(0, 10), detail: `${s.itemName} × ${s.qty}`, type: "sale", in: s.total, out: 0, voided: !!s.voidedAt, voidReason: s.voidReason });
+  for (const e of expenses) rows.push({ kind: "expense", id: e.id, date: e.date, day: e.date.slice(0, 10), detail: e.category, type: e.category, note: e.note, in: 0, out: e.amount, voided: !!e.voidedAt, voidReason: e.voidReason });
+  return rows.sort((a, b) => b.date.localeCompare(a.date));
 }
 function dashboard(): Dashboard {
   const todayStr = now.toDateString();
@@ -218,6 +233,23 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     return r(["Date,Kind,Detail,Type,Note,In,Out,Status", ...rows.sort(), "", `,,,,Total income,${f.income.toFixed(2)},,`, `,,,,Total outgoings,,${f.outgoings.toFixed(2)},`, `,,,,Net,${f.net.toFixed(2)},,`].join("\n"));
   }
   if (path === "/subscriptions") return r(subscriptions(params.get("m") ?? MONTH));
+  if (seg[0] === "subscription-charges") return r({ ok: true });
+  if (path === "/ledger") {
+    const kind = params.get("kind") ?? "";
+    const type = params.get("type") ?? "";
+    const q = (params.get("q") ?? "").toLowerCase();
+    const rows = ledgerRows().filter((x) =>
+      (!kind || (kind === "income" ? x.kind !== "expense" : x.kind === kind)) &&
+      (!type || x.type === type) &&
+      (!q || `${x.detail} ${x.note ?? ""} ${x.reference ?? ""}`.toLowerCase().includes(q)));
+    const liveRows = rows.filter((x) => !x.voided);
+    const income = liveRows.reduce((n, x) => n + x.in, 0);
+    const outgoings = liveRows.reduce((n, x) => n + x.out, 0);
+    const offset = Number(params.get("offset") ?? 0);
+    const limit = Number(params.get("limit") ?? 50);
+    return r({ items: rows.slice(offset, offset + limit), total: rows.length, hasMore: offset + limit < rows.length, offset, limit, totals: { income, outgoings, net: income - outgoings }, from: "", to: "" });
+  }
+  if (seg[0] === "cash-closings") return r(method === "GET" ? [] : { ok: true });
   if (seg[0] === "audit" && seg.length === 3) {
     return r(audit.filter((a) => a.entity === seg[1] && a.ref === seg[2]));
   }
@@ -270,7 +302,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   if (seg[0] === "payments") {
     if (seg.length === 1) {
       if (method === "POST") { const p: Payment = { id: genId(), type: "other", date: nowISO, ...body, traineeName: body.trainee ? tName(body.trainee) : undefined, createdAt: nowISO }; payments.unshift(p); return r(p); }
-      return r(payments);
+      const t = params.get("trainee");
+      const pm = params.get("periodMonth");
+      return r(payments.filter((p) => (!t || p.trainee === t) && (!pm || p.periodMonth === pm)));
     }
     if (seg[1] === "export") {
       const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
@@ -278,7 +312,11 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       return r(["Date,Trainee,Type,Period,Amount,Note", ...rows].join("\n"));
     }
     const id = seg[1];
-    if (seg[2] === "receipt") return r({ studio: "Bronze Boxing", payment: payments.find((p) => p.id === id), issued: nowISO });
+    if (seg[2] === "receipt") {
+      const p = payments.find((x) => x.id === id);
+      return r({ studio: "Bronze Boxing Club", studioInfo: { name: "Bronze Boxing Club", currency: "$" }, number: id.slice(-8).toUpperCase(), payment: p, issued: nowISO, void: !!p?.voidedAt, method: p?.method ?? "unspecified", cashDay: p?.date.slice(0, 10) ?? "", timezone: "Asia/Beirut" });
+    }
+    if (method === "GET" && seg.length === 2) return r(payments.find((x) => x.id === id));
     if (method === "PUT") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; Object.assign(p, body); p.traineeName = body.trainee ? tName(body.trainee) : undefined; logAudit("payment", id, "update", before, p); } return r(p); }
     if (method === "DELETE" || seg[2] === "void") { const p = payments.find((x) => x.id === id); if (p && !p.voidedAt) { const before = { ...p }; p.voidedAt = nowISO; p.voidReason = body.reason ?? params.get("reason") ?? ""; logAudit("payment", id, "void", before, p); } return r({ ok: true, voided: true }); }
   }

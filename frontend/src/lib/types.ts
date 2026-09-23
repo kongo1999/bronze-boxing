@@ -75,12 +75,38 @@ export interface Payment {
   /** When the cash was received. */
   date: string;
   note?: string;
+  /** How it was paid; absent on payments recorded before methods existed. */
+  method?: PayMethod;
+  reference?: string;
   saleId?: string;
   createdAt: string;
   createdBy?: string;
   voidedAt?: string;
   voidReason?: string;
   voidedBy?: string;
+}
+
+export type PayMethod = "cash" | "card" | "bank_transfer" | "other";
+
+export interface Receipt {
+  studio: string;
+  studioInfo: { name: string; address?: string; phone?: string; currency: string };
+  number: string;
+  payment: Payment;
+  issued: string;
+  void: boolean;
+  method: PayMethod | "unspecified";
+  cashDay: string;
+  timezone: string;
+  charge?: Charge;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  hasMore: boolean;
+  offset: number;
+  limit: number;
 }
 
 export interface Reminder {
@@ -139,6 +165,7 @@ export interface Sale {
   unitCost?: number;
   listPrice?: number;
   priceReason?: string;
+  method?: PayMethod;
   total: number;
   returnedQty?: number;
   returnedTotal?: number;
@@ -210,14 +237,57 @@ export interface Dashboard {
   overdueSubscriptions: SubStatus[];
 }
 
+/** Net cash for a period: money in minus recorded money out, by cash date. */
 export interface Financials {
   income: number;
   outgoings: number;
   net: number;
   byType: Record<string, number>;
   byCategory: Record<string, number>;
+  byMethod: Record<string, number>;
+  counts: Record<string, number>;
   from: string;
   to: string;
+  previous: { income: number; outgoings: number; net: number; from: string; to: string };
+}
+
+export interface LedgerRow {
+  kind: "payment" | "sale" | "return" | "expense";
+  id: string;
+  sale?: string;
+  date: string;
+  day: string;
+  detail: string;
+  type: string;
+  method?: string;
+  reference?: string;
+  periodMonth?: string;
+  trainee?: string;
+  note?: string;
+  in: number;
+  out: number;
+  voided: boolean;
+  voidReason?: string;
+}
+
+export interface LedgerPage extends Page<LedgerRow> {
+  totals: { income: number; outgoings: number; net: number };
+  from: string;
+  to: string;
+}
+
+export interface ClosingDay {
+  day: string;
+  cash: number;
+  unspecified: number;
+  card: number;
+  transfer: number;
+  other: number;
+  expected: number;
+  counted?: number;
+  difference?: number;
+  note?: string;
+  actor?: string;
 }
 
 export interface SearchResults {

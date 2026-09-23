@@ -12,6 +12,10 @@ import (
 
 // New builds the Fiber app with middleware and registers all /api routes.
 func New(cfg config.Config, store *db.Store) *fiber.App {
+	studio = studioInfo{
+		Name: defaultStr(cfg.StudioName, "Bronze Boxing Club"), Address: cfg.StudioAddress,
+		Phone: cfg.StudioPhone, Currency: defaultStr(cfg.Currency, "$"),
+	}
 	app := fiber.New(fiber.Config{
 		AppName:      "Bronze Boxing API",
 		ErrorHandler: errorHandler,
@@ -49,6 +53,7 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	registerDashboard(api, store)
 	registerSearch(api, store)
 	registerAudit(api, store)
+	registerLedger(api, store)
 
 	return app
 }

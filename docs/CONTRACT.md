@@ -68,12 +68,12 @@ fee going forward, from `feeFromMonth`). Historical dues never come from them.
 | GET | `/subscriptions?m=YYYY-MM` | The month's dues roster — [rows](fixtures/subscriptions.json) `{trainee, due, amountPaid, state, remaining, periodMonth, chargeId, source, projected, paymentCount, lastPaymentDate}`. Past/current months read stored charges (materialized idempotently from terms); future months add projected rows. Inactive/removed trainees keep their issued rows. |
 | GET | `/subscription-charges?trainee=&state=` | Stored charges, newest month first ([sample](fixtures/subscription-charges.json)) |
 | POST | `/subscription-charges/:id/adjust` | `{due, reason}` — audited; refused below what's paid (`DUE_BELOW_PAID`). Reconciles an imported charge. |
-| GET | `/payments?m=` \| `?from=&to=` `&trainee=` | By cash `date` |
-| POST | `/payments` | `{trainee, amount, type, periodMonth, date? \| day?, note}`. Subscriptions need a trainee and `periodMonth`, must fit the month's remaining balance (`OVERPAYMENT`), and a month with no dues is `NO_CHARGE`. [Sample](fixtures/payment-partial.json) |
+| GET | `/payments?m=` \| `?from=&to=` `&trainee=&periodMonth=&type=` | By cash `date`; `periodMonth` matches the dues period at any cash date. With `limit`(+`offset`) the response is a page `{items,total,hasMore,offset,limit}`, otherwise the original array. A bare `/payments` (no filter, no limit) is refused rather than downloading everything. |
+| POST | `/payments` | `{trainee, amount, type, periodMonth, date? \| day?, method?, reference?, note}` — `method` ∈ cash, card, bank_transfer, other (absent on old rows = "unspecified"). Subscriptions need a trainee and `periodMonth`, must fit the month's remaining balance (`OVERPAYMENT`), and a month with no dues is `NO_CHARGE`. [Sample](fixtures/payment-partial.json) |
 | GET | `/payments/:id` | |
 | PUT | `/payments/:id` | Correction; an amount change needs `reason`. Moves money between charges in one transaction. A sale mirror can't be reclassified (`LINKED_SALE`). |
 | POST | `/payments/:id/void` | `{reason}` (required). `DELETE /payments/:id?reason=` is the legacy spelling. |
-| GET | `/payments/:id/receipt` | `{studio, payment, issued, void, charge?}` |
+| GET | `/payments/:id/receipt` | `{studio, studioInfo{name,address,phone,currency}, number, payment, issued, void, method, cashDay, timezone, charge?}` — `number` is the last 8 hex of the id; the SPA prints/shares it (`/payments/:id/receipt`) |
 | GET | `/payments/export?m=` | CSV |
 
 Dues states: `unpaid` (nothing paid), `partial` (0 < paid < due), `paid`,
@@ -87,8 +87,11 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | POST | `/expenses` | `{amount, category, note, date? \| day?}` ([sample](fixtures/expense.json)) |
 | PUT | `/expenses/:id` | Amount change needs `reason` |
 | POST | `/expenses/:id/void` | `{reason}` (required); `DELETE ?reason=` legacy |
-| GET | `/financials?m=` \| `?from=&to=` | `{income, outgoings, net, byType, byCategory, from, to}` — net **cash** |
-| GET | `/financials/export?m=` | CSV statement; voided rows listed, excluded from totals |
+| GET | `/financials?m=` \| `?from=&to=` | `{income, outgoings, net, byType, byCategory, byMethod, counts, from, to, previous{income,outgoings,net,from,to}}` — net **cash** (money in − recorded money out by cash date; not profit). `previous` is the prior month, or the same-length window before a custom range. Income = payments + shop sales − returns. |
+| GET | `/ledger?m= \| from&to &kind=payment\|sale\|return\|expense\|income &type= &method= &trainee= &q= &voided=0 &limit &offset` | Every money row, newest first, filtered on the server before paging: `{items, total, hasMore, totals, from, to}`. Voided rows are listed (flagged) and never counted. |
+| GET | `/financials/export` | CSV of exactly the ledger rows for the same period and filters (oldest first) with Method, Reference, Period and Void-reason columns, then Total in / Total out / Net cash. |
+| GET | `/cash-closings?m=` | Per studio day with income or a count: expected cash (cash + unspecified-method payments + shop sales − refunds) vs the counted closing amount, and the difference |
+| PUT | `/cash-closings/:day` | `{counted, note}` — the till count for a past or current day |
 
 ### Inventory & sales
 | Method | Path | Notes |
@@ -134,6 +137,8 @@ page they were opened from (`?back=`).
 | `subscription_charges` | One fixed row per (trainee, month); unique index; `paidCents` projection guarded transactionally |
 | `stock_movements` | Append-only stock ledger; movements sum to `stock` |
 | `schema_migrations` | Applied migration ids |
+| `cash_closings` | One counted closing amount per studio day (unique `day`) |
+| `sale_returns` | Partial returns of sales (Phase 5 endpoint); counted in the cash month of the return while the sale is live |
 
 ## Phase 0–1 migration impact
 
