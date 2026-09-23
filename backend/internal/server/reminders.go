@@ -118,25 +118,39 @@ func (h *reminderHandler) list(c *fiber.Ctx) error {
 func (h *reminderHandler) counts(c *fiber.Ctx) error {
 	ctx, cancel := reqCtx()
 	defer cancel()
-	cur, err := h.store.Coll(models.CollReminders).Find(ctx, bson.M{"done": false})
+	n, err := reminderCounts(ctx, h.store)
 	if err != nil {
 		return err
 	}
+	return c.JSON(n)
+}
+
+type remindCounts struct {
+	Overdue int `json:"overdue"`
+	Today   int `json:"today"`
+	Open    int `json:"open"`
+}
+
+func reminderCounts(ctx context.Context, store *db.Store) (remindCounts, error) {
+	cur, err := store.Coll(models.CollReminders).Find(ctx, bson.M{"done": false})
+	if err != nil {
+		return remindCounts{}, err
+	}
 	var open []models.Reminder
 	if err := cur.All(ctx, &open); err != nil {
-		return err
+		return remindCounts{}, err
 	}
 	today := models.DateKey(time.Now())
-	overdue, dueToday := 0, 0
+	out := remindCounts{Open: len(open)}
 	for _, r := range open {
 		switch d := effectiveDay(r); {
 		case d < today:
-			overdue++
+			out.Overdue++
 		case d == today:
-			dueToday++
+			out.Today++
 		}
 	}
-	return c.JSON(fiber.Map{"overdue": overdue, "today": dueToday, "open": len(open)})
+	return out, nil
 }
 
 func findReminder(ctx context.Context, store *db.Store, id primitive.ObjectID) (models.Reminder, error) {

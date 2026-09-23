@@ -63,8 +63,24 @@ TEST_MONGODB_URI="mongodb://localhost:27027/?replicaSet=rs0" go test ./...
 cd frontend && npm test && npm run build
 ```
 Integration tests cover rollback after a mid-transaction failure, concurrent
-sells and dues payments, void/edit retries, partial-payment states, fee
-changes that must not rewrite past months, and migration idempotency.
+sells, returns and dues payments, void/edit retries, partial-payment states,
+fee changes that must not rewrite past months, migration idempotency, series
+and plan counters (the 9/12 scenario), capacity races, the "not started yet"
+rule, stock adjustments and partial returns, search (typos, stale results,
+matches beyond page one), the monthly report reconciling to the ledger and
+dues, DST month edges, and login keeping the token out of JavaScript.
+The fuzzy matcher is tested in Go and TypeScript against the same cases
+(`docs/fixtures/fuzzy-cases.json`); the demo layer has contract tests.
+
+## Demo mode
+Production builds with no backend (e.g. a Vercel preview) serve an in-memory
+demo from `frontend/src/lib/demo.ts` with the same rules and response shapes
+as the API, and a banner saying nothing is saved. `VITE_DEMO=false` turns it
+off (the droplet build does); `VITE_DEMO=true` forces it in dev.
+
+## Backups
+Scheduled, encrypted backups run as the `backup` compose service; restores
+always go into a new database (`./restore-backup.sh`). See `DEPLOY.md`.
 
 ## Migrations
 Schema and data changes run explicitly with `cmd/migrate` — never inside a

@@ -10,7 +10,7 @@ One admin (the studio owner/coach) of Bronze Boxing Club, a small boxing studio 
 
 ## Product Purpose
 
-Run the studio's daily operations: trainee roster and dues, class schedule and attendance, payments and receipts, expenses and financials, gear inventory and sales, reminders. The home screen is a launcher: open the app, see what matters right now (date, next session), jump to a section in one tap. Success = the owner trusts the numbers and never feels lost.
+Run the studio's daily operations: trainee roster and dues, class schedule and attendance (with recurring series and per-trainee session plans), payments and receipts, expenses and financials with a monthly report, gear inventory and sales, reminders. The home screen is a launcher: open the app, see what matters right now (date, next session, and a short "needs attention" list of exceptions — partial and unpaid dues, overdue reminders, plans nearly used up, low stock), jump to a section in one tap. Search finds anything, typos and all. Success = the owner trusts the numbers and never feels lost.
 
 ## Brand Personality
 
@@ -25,7 +25,7 @@ Ringside premium. Dark, warm, confident: a high-end boxing club at night, leathe
 ## Design Principles
 
 - **Launcher first**: the home screen orients and routes; deep data lives in the sections.
-- **One glance, one truth**: surface only what changes a decision right now (date, next session); everything else is one tap away.
+- **One glance, one truth**: surface only what changes a decision right now (date, next session, exceptions that need a hand); everything else is one tap away. Never a chart grid on Home.
 - **The badge carries the brand**: the club logo does identity work; the UI stays quiet around it.
 - **Warm dark, never flat black**: tinted neutrals, bronze accents, the velvet purple glow; depth from light, not from borders.
 - **Thumb-reach economy**: primary actions reachable one-handed on a phone.

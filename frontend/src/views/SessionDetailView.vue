@@ -69,7 +69,7 @@ const back = computed(() => backTarget(route.query, "/schedule"));
 const here = computed(() => route.fullPath);
 const dateLabel = (iso: string) => formatDay(dayOf(iso), { weekday: "long", month: "long", day: "numeric" });
 function changed() {
-  invalidate("sessions", "home-upcoming", "trainees");
+  invalidate("sessions", "dashboard", "trainees");
 }
 
 // ── Attendance ────────────────────────────────────────────────────────────

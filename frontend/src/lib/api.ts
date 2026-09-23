@@ -5,29 +5,8 @@ import { markLoggedOut } from "./auth";
 
 const BASE = "/api";
 
-/**
- * An error the API returned. `code` is stable and machine-readable
- * (e.g. OVERPAYMENT, INSUFFICIENT_STOCK, REASON_REQUIRED, SCHEDULE_CONFLICT);
- * `field` names the input it concerns, so forms can show the message beside
- * the right field; `details` carries structured extras (remaining balance,
- * conflicting dates, the existing record being duplicated…).
- */
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public code?: string,
-    public field?: string,
-    public details?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-export function isApiError(e: unknown, code?: string): e is ApiError {
-  return e instanceof ApiError && (code === undefined || e.code === code);
-}
+import { ApiError } from "./api-error";
+export { ApiError, isApiError } from "./api-error";
 
 /** Human message for any thrown value. */
 export function errMsg(e: unknown, fallback = "Something went wrong"): string {

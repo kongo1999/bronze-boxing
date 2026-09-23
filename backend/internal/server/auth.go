@@ -171,7 +171,9 @@ func loginHandler(store *db.Store, enabled bool) fiber.Handler {
 			ck.Expires = time.Now().Add(sessionTTL)
 		}
 		c.Cookie(ck)
-		return c.JSON(fiber.Map{"token": token, "user": u})
+		// Success and who signed in — never the token: it lives only in the
+		// httpOnly cookie, out of reach of page scripts.
+		return c.JSON(fiber.Map{"ok": true, "username": u.Username})
 	}
 }
 
@@ -182,16 +184,54 @@ func logoutHandler(store *db.Store) fiber.Handler {
 		if raw := sessionToken(c); raw != "" {
 			_, _ = store.Coll(models.CollAuthSessions).DeleteOne(ctx, bson.M{"tokenHash": hashToken(raw)})
 		}
-		// Expire the cookie on the client too.
+		// Expire the cookie on the client too, with the attributes it was set
+		// with (a browser won't let a plain cookie replace a Secure one).
 		c.Cookie(&fiber.Cookie{
 			Name:     sessionCookieName,
 			Value:    "",
 			Path:     "/",
 			HTTPOnly: true,
+			Secure:   c.Get(fiber.HeaderXForwardedProto) == "https",
+			SameSite: "Lax",
 			Expires:  time.Now().Add(-time.Hour),
 			MaxAge:   -1,
 		})
 		return c.JSON(fiber.Map{"ok": true})
+	}
+}
+
+// sameOrigin refuses a state-changing request whose Origin is another site.
+// The session cookie is SameSite=Lax, which already keeps it off cross-site
+// POSTs; this is the second lock. Requests without an Origin header (API
+// clients, curl) are left to the session check.
+func sameOrigin(allowed string) fiber.Handler {
+	extra := map[string]bool{}
+	for _, o := range strings.Split(allowed, ",") {
+		if o = strings.TrimSpace(o); o != "" && o != "*" {
+			extra[strings.TrimRight(o, "/")] = true
+		}
+	}
+	return func(c *fiber.Ctx) error {
+		switch c.Method() {
+		case fiber.MethodGet, fiber.MethodHead, fiber.MethodOptions:
+			return c.Next()
+		}
+		origin := strings.TrimRight(c.Get(fiber.HeaderOrigin), "/")
+		if origin == "" || extra[origin] {
+			return c.Next()
+		}
+		scheme := c.Get(fiber.HeaderXForwardedProto)
+		if scheme == "" {
+			scheme = c.Protocol()
+		}
+		host := c.Get(fiber.HeaderXForwardedHost)
+		if host == "" {
+			host = string(c.Request().Host())
+		}
+		if strings.EqualFold(origin, scheme+"://"+host) {
+			return c.Next()
+		}
+		return apiErr(fiber.StatusForbidden, "CROSS_ORIGIN", "this request came from another site and was refused")
 	}
 }
 

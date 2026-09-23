@@ -218,7 +218,9 @@ func TestMonthlyReportReconciles(t *testing.T) {
 // the 1st belongs to the next month.
 func TestMonthlyReportUsesStudioDaysAcrossDST(t *testing.T) {
 	e := newEnv(t)
-	at := func(y int, m time.Month, d, h, min int) time.Time { return time.Date(y, m, d, h, min, 0, 0, time.Local) }
+	at := func(y int, m time.Month, d, h, min int) time.Time {
+		return time.Date(y, m, d, h, min, 0, 0, time.Local)
+	}
 	pay := func(when time.Time, amount float64) {
 		if _, err := e.store.Coll(models.CollPayments).InsertOne(e.ctx, models.Payment{
 			ID: primitive.NewObjectID(), Amount: amount, Type: models.PayDropin, Date: when, CreatedAt: when,

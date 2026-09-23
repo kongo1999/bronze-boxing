@@ -64,8 +64,10 @@ export async function login(username: string, password: string, remember: boolea
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password, remember }),
     });
-    const j = await res.json().catch(() => null);
-    if (!res.ok || !j?.token) {
+    // Success is the HTTP status: the session is the httpOnly cookie the
+    // response set, which this code never sees.
+    if (!res.ok) {
+      const j = await res.json().catch(() => null);
       return j?.error ?? "Couldn't sign in. Try again.";
     }
     authed = true;

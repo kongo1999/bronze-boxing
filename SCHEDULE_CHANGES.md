@@ -1,5 +1,12 @@
 # Schedule → Week View + Checkbox List
 
+> **Historical note (superseded, September 2026).** This describes an earlier
+> rework. Today: recurring classes are real series with a planned count and
+> "this and future" edits; a class can be marked done only once it has
+> started, and attendance is reviewed per person; deploys need a backup and
+> migrations first (`DEPLOY.md` → "Updating after a code change"). The API
+> contract is in `docs/CONTRACT.md`.
+
 ## Summary
 
 Replaced the month-calendar Schedule UI with a simpler week view. The

@@ -76,7 +76,46 @@ func registerDashboard(r fiber.Router, store *db.Store) {
 			overdue = append(overdue, s)
 		}
 
+		// "Needs attention": overdue reminders, items to restock, plans
+		// close to their target or end date, and the next class.
+		rc, err := reminderCounts(ctx, store)
+		if err != nil {
+			return err
+		}
+		var items []models.InventoryItem
+		if cur, err := store.Coll(models.CollInventory).Find(ctx, bson.M{"active": bson.M{"$ne": false}}); err != nil {
+			return err
+		} else if err := cur.All(ctx, &items); err != nil {
+			return err
+		}
+		low, out := 0, 0
+		for _, it := range items {
+			switch it.Shortage() {
+			case "low":
+				low++
+			case "out":
+				out++
+			}
+		}
+		nearing, err := plansNearing(ctx, store, now)
+		if err != nil {
+			return err
+		}
+		var next *models.Session
+		var ns models.Session
+		if err := store.Coll(models.CollSessions).FindOne(ctx,
+			bson.M{"start": bson.M{"$gte": now}, "status": models.SessScheduled},
+			options.FindOne().SetSort(bson.D{{Key: "start", Value: 1}})).Decode(&ns); err == nil {
+			next = &ns
+		}
+
 		return c.JSON(fiber.Map{
+			"remindersOverdue":     rc.Overdue,
+			"remindersToday":       rc.Today,
+			"lowStock":             low,
+			"outOfStock":           out,
+			"plansNearing":         nearing,
+			"nextSession":          next,
 			"today":                now,
 			"month":                month,
 			"monthRevenue":         monthRevenue,

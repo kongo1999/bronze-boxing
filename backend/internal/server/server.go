@@ -38,6 +38,7 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	// guards real requests.
 	authOn := cfg.AdminPassword != ""
 	if authOn {
+		app.Use(sameOrigin(cfg.CORSOrigins))
 		app.Use(requireSession(store))
 	}
 

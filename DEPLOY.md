@@ -8,6 +8,8 @@ The whole app runs as three containers on one droplet:
 | `api`   | Go (Fiber) API | no (private network) |
 | `mongo` | MongoDB 7 as a single-node replica set, data in a named volume | no (private network) |
 | `migrate` | One-shot data migrations (`docker compose run --rm migrate`) | no — never started by `up` |
+| `backup` | Scheduled database backups into `./backups` (encrypted with `BACKUP_PASSPHRASE`) | no |
+| `backup-offsite` | Optional: copies the encrypted backups to any rclone remote (`--profile offsite`) | no — only with the profile |
 
 Only `web` is reachable from the internet. The API and database are only reachable
 on the private compose network.
@@ -50,6 +52,9 @@ Set at minimum:
   account is created from these when the API boots; sign in to the app with
   exactly these credentials. Leave the password empty only if the droplet is
   otherwise access-restricted (disables login entirely).
+- `BACKUP_PASSPHRASE` — encrypts the scheduled backups. **Store it somewhere
+  other than the droplet** (a password manager): an encrypted backup can't be
+  restored without it. See "Backups" below.
 
 ## 6. Launch
 ```bash
@@ -94,6 +99,17 @@ If `migrate -dry-run` lists items under **needs review**, they are real-data
 questions (e.g. an old subscription payment with no period) — the migration
 never guesses; fix them in the app afterwards.
 
+### Release checks
+Before calling a release done:
+1. Locally: `go vet ./... && go test ./...` with `TEST_MONGODB_URI` set (the
+   integration tests), `npm run build` and `npm test` in `frontend/`.
+2. On the droplet, after the update: `docker compose ps` all healthy,
+   `docker compose run --rm migrate -verify` → `verify: OK`, and running
+   `migrate` a second time applies nothing.
+3. The restore drill above against the backup taken for this release.
+4. Sign in, open Money, the schedule and the monthly report; record nothing
+   you don't mean to keep.
+
 ### One-time upgrade: standalone Mongo → replica set (September 2026 release)
 The first deploy of this release restarts the existing `mongo_data` volume as
 a replica set. Data is kept; nothing is deleted. Rehearsed locally on a copy
@@ -116,16 +132,44 @@ unused by it. Restore the backup only if you must also undo data entered
 after the upgrade.
 
 ## Backups (Mongo)
-Take one before every update. `backup-now.sh` in the repo root wraps this.
-```bash
-# dump to a file on the host
-docker compose exec -T mongo mongodump --username "$MONGO_USER" --password "$MONGO_PASSWORD" \
-  --authenticationDatabase admin --db "$DB_NAME" --archive > backup-$(date +%F).archive
 
-# restore
-docker compose exec -T mongo mongorestore --username "$MONGO_USER" --password "$MONGO_PASSWORD" \
-  --authenticationDatabase admin --archive < backup-YYYY-MM-DD.archive
+**Scheduled.** The `backup` service starts with `docker compose up -d` and
+writes a compressed archive of the database to `./backups` at start-up and
+then every `BACKUP_INTERVAL_HOURS` (default 24), keeping
+`BACKUP_RETENTION_DAYS` (default 14; only its own `bronze-*` files are ever
+pruned). With `BACKUP_PASSPHRASE` set the archives are encrypted
+(`*.archive.gz.enc`, AES-256 with PBKDF2); without it they are still taken but
+stay unencrypted on the droplet, with a warning in `docker compose logs backup`.
+
+**Off-site.** A backup on the same disk doesn't survive losing the droplet.
+Configure any rclone remote named `offsite` in `.env` (S3, Backblaze B2, SFTP to
+another machine — see `.env.example`), set `BACKUP_REMOTE`, and run
+`docker compose --profile offsite up -d`. Only encrypted files are uploaded.
+Expire old copies with the remote's lifecycle rules.
+
+**Before an update**, take one on demand (works whatever state Mongo is in):
+```bash
+./backup-now.sh     # → backups/bronze-YYYYmmdd-HHMMSS.archive.gz[.enc]
 ```
+
+**Restore — always into a new database, never over the live one:**
+```bash
+./restore-backup.sh backups/bronze-20260923-020000.archive.gz.enc            # → bronze_restore_<timestamp>
+./restore-backup.sh backups/bronze-20260923-020000.archive.gz.enc bronze_restore_check
+```
+It decrypts (needs `BACKUP_PASSPHRASE`), restores into the named database,
+prints its document counts and runs `migrate -verify` on it. It refuses the
+live `DB_NAME` and any database that already has collections. To actually
+switch the app to a restored database, stop and think first: point `DB_NAME`
+at it in `.env` and `docker compose up -d api` — the old database stays
+untouched, so switching back is the same edit.
+
+**Restore drill (part of every release check):** restore the latest backup
+into a scratch name and confirm its counts and `verify: OK`. Rehearsed for
+this release in a disposable replica set: dump → encrypt → decrypt → restore
+into a new database; all 19 collections matched in count, `verify` passed, and
+a wrong passphrase failed to decrypt.
+
 The data also persists in the `mongo_data` Docker volume across container restarts.
 
 ## Seeding demo data (optional, first run)
@@ -152,8 +196,17 @@ For a real studio, skip this and enter data through the UI.
   session cookie that dies with the browser. Sessions are server-side (hashed
   tokens in `auth_sessions`, auto-expired by Mongo TTL) and **slide** — an
   actively used session renews so admins aren't logged out mid-use — so sign-out
-  and password rotation still revoke them for real. API/CLI clients may instead
-  send the token as an `Authorization: Bearer` header.
+  and password rotation still revoke them for real. The login response body
+  carries only `{ok, username}`, never the token; an API/CLI client takes the
+  `bb_session` value from the response's `Set-Cookie` and sends it back as a
+  cookie or as an `Authorization: Bearer` header. Sign-out expires the cookie
+  with the same attributes it was set with.
+- **Cross-site requests are refused.** Besides `SameSite=Lax`, any
+  state-changing request (POST/PUT/PATCH/DELETE) whose `Origin` is not this
+  site gets `403 CROSS_ORIGIN`. Caddy passes the real `Host` and
+  `X-Forwarded-Proto`, which is what the check compares against. On plain
+  HTTP (`SITE_ADDRESS=:80`) the cookie can't be `Secure` — set a domain for
+  HTTPS before relying on the app over public networks.
 - **Rotate the password:** edit `ADMIN_PASSWORD` in `.env`, then
   `docker compose up -d api`. All existing sessions for the account are revoked
   and everyone signs in again with the new password.
@@ -168,3 +221,5 @@ For a real studio, skip this and enter data through the UI.
 - **API can't reach Mongo** → check `MONGO_USER`/`MONGO_PASSWORD` match in `.env`; `docker compose logs mongo`.
 - **HTTPS not issued** → DNS A record must resolve to the droplet and ports 80+443 open before Caddy can get a cert; check `docker compose logs web`.
 - **Validate compose before launch** → `docker compose config` prints the resolved config (run on the droplet).
+- **"UNENCRYPTED" in `docker compose logs backup`** → set `BACKUP_PASSPHRASE` in `.env`, then `docker compose up -d backup`.
+- **Backup "FAILED"** → `docker compose logs backup`; usually Mongo unhealthy or wrong `MONGO_USER`/`MONGO_PASSWORD`.

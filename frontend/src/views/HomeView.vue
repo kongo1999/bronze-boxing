@@ -10,13 +10,14 @@ import {
   Package,
   Bell,
   ChevronRight,
+  FileBarChart,
   type LucideIcon,
 } from "lucide-vue-next";
-import { api, qs } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
-import type { Session } from "@/lib/types";
-import { formatTime, formatLongDate } from "@/lib/format";
-import { studioParts, todayKey, dayOf, formatDay } from "@/lib/studio";
+import type { Dashboard } from "@/lib/types";
+import { formatTime, formatLongDate, money } from "@/lib/format";
+import { studioParts, todayKey, dayOf, formatDay, currentMonth } from "@/lib/studio";
 
 interface MenuItem {
   to: string;
@@ -43,18 +44,40 @@ const dateLabel = computed(() =>
   formatDay(todayKey(), { weekday: "long", month: "long", day: "numeric" }),
 );
 
-// "Up next": the first scheduled session from now through the next 7 days.
-// Cached (stale-while-revalidate) so revisits render instantly; the hero never
-// blocks on this — loading shows a same-height shimmer, an error shows nothing.
-const from = new Date();
-const to = new Date(from.getTime() + 7 * 86_400_000);
-const { data: upcoming, loading: nextLoading, error: nextError } = useCachedAsync(
-  "home-upcoming",
-  () => api.get<Session[]>(`/sessions${qs({ from: from.toISOString(), to: to.toISOString() })}`),
-);
-const next = computed(() =>
-  (upcoming.value ?? []).find((s) => s.status === "scheduled" && new Date(s.start) > new Date()),
-);
+// One call for the hero's "Up next" and the "Needs attention" strip. Cached
+// (stale-while-revalidate) so revisits render instantly; the hero never
+// blocks on it — loading shows a same-height shimmer, an error shows nothing.
+const { data: dash, loading: nextLoading, error: nextError } = useCachedAsync("dashboard", () => api.get<Dashboard>("/dashboard"));
+const next = computed(() => dash.value?.nextSession ?? undefined);
+
+// Exceptions only, each opening the filtered place to deal with it.
+interface Attention {
+  to: string;
+  text: string;
+  tone: "partial" | "overdue" | "info";
+}
+const month = currentMonth();
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const attention = computed<Attention[]>(() => {
+  const d = dash.value;
+  if (!d) return [];
+  const out: Attention[] = [];
+  if (d.partialCount) out.push({ to: `/payments?m=${month}&show=partial`, text: `${plural(d.partialCount, "trainee")} partly paid`, tone: "partial" });
+  if (d.unpaidCount) out.push({ to: `/payments?m=${month}&show=unpaid`, text: `${plural(d.unpaidCount, "trainee")} unpaid · ${money(d.outstanding)} still owed in all`, tone: "overdue" });
+  if (d.remindersOverdue) out.push({ to: "/reminders", text: `${plural(d.remindersOverdue, "overdue reminder")}`, tone: "overdue" });
+  for (const p of d.plansNearing.slice(0, 3)) {
+    const left = p.remaining === 0 ? "plan complete" : `${plural(p.remaining, "session")} left`;
+    const ends = p.endDate ? ` · ends ${formatDay(p.endDate, { month: "short", day: "numeric" })}` : "";
+    out.push({ to: `/trainees/${p.trainee}`, text: `${p.traineeName}: ${left}${ends}`, tone: "info" });
+  }
+  if (d.plansNearing.length > 3) out.push({ to: "/trainees", text: `${d.plansNearing.length - 3} more plans nearly done`, tone: "info" });
+  if (d.lowStock || d.outOfStock) {
+    const bits = [d.outOfStock ? `${d.outOfStock} out of stock` : "", d.lowStock ? `${d.lowStock} running low` : ""].filter(Boolean);
+    out.push({ to: "/inventory?show=short", text: bits.join(" · "), tone: d.outOfStock ? "overdue" : "partial" });
+  }
+  return out;
+});
+const dot: Record<Attention["tone"], string> = { partial: "bg-partial", overdue: "bg-overdue", info: "bg-bronze" };
 const nextIsToday = computed(
   () => !!next.value && dayOf(next.value.start) === todayKey(),
 );
@@ -106,6 +129,26 @@ const nextIsToday = computed(
         </div>
       </div>
     </header>
+
+    <!-- Needs attention: only exceptions, each one tap from its fix. -->
+    <section v-if="dash" class="rounded-2xl border border-line bg-surface/80 p-2" aria-labelledby="attention-title">
+      <h2 id="attention-title" class="px-2 pb-1 pt-1 label-eyebrow text-[0.625rem] text-faint">Needs attention</h2>
+      <p v-if="!attention.length" class="px-2 pb-2 text-sm text-muted">All clear: nothing owed, overdue or running low.</p>
+      <RouterLink
+        v-for="a in attention"
+        :key="a.to + a.text"
+        :to="a.to"
+        class="flex min-h-11 items-center gap-3 rounded-xl px-2 text-sm transition-colors hover:bg-elevated"
+      >
+        <span class="h-2 w-2 shrink-0 rounded-full" :class="dot[a.tone]" aria-hidden="true" />
+        <span class="min-w-0 flex-1 truncate">{{ a.text }}</span>
+        <ChevronRight class="h-4 w-4 shrink-0 text-faint" />
+      </RouterLink>
+      <RouterLink :to="`/reports?m=${month}`" class="mt-1 flex min-h-11 items-center gap-3 rounded-xl border-t border-line/60 px-2 text-sm font-medium text-bronze transition-colors hover:bg-elevated">
+        <FileBarChart class="h-4 w-4 shrink-0" /> <span class="flex-1">This month's report</span>
+        <ChevronRight class="h-4 w-4 shrink-0 text-faint" />
+      </RouterLink>
+    </section>
 
     <!-- Launcher: same six destinations, tiles with real depth. -->
     <nav class="grid grid-cols-2 gap-3 md:grid-cols-3">

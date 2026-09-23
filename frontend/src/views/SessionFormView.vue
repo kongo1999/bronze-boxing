@@ -261,7 +261,7 @@ async function submit(override = false) {
         attendees: attendeePayload(),
         planOverride: override,
       });
-      invalidate("sessions", "home-upcoming", "trainees");
+      invalidate("sessions", "dashboard", "trainees");
       toast("Session updated.", "success");
       router.push(back());
       return;
@@ -278,7 +278,7 @@ async function submit(override = false) {
         location: form.location, capacity: form.capacity, attendees: attendeePayload(), planOverride: override,
       });
     }
-    invalidate("sessions", "home-upcoming", "trainees");
+    invalidate("sessions", "dashboard", "trainees");
     router.push(back());
   } catch (e) {
     saving.value = false;

@@ -327,6 +327,13 @@ export interface Dashboard {
   todaySessions: Session[];
   weekReminders: Reminder[];
   overdueSubscriptions: SubStatus[];
+  remindersOverdue: number;
+  remindersToday: number;
+  lowStock: number;
+  outOfStock: number;
+  /** Active plans with two or fewer sessions left, or ending within a week. */
+  plansNearing: { id: string; trainee: string; traineeName: string; title: string; remaining: number; endDate?: string }[];
+  nextSession: Session | null;
 }
 
 /** Net cash for a period: money in minus recorded money out, by cash date. */
