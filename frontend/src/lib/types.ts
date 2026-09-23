@@ -428,3 +428,94 @@ export interface AuditEntry {
   reason?: string;
   at: string;
 }
+
+// ── Monthly report (GET /reports/monthly?m=) ─────────────────────────────
+export interface ReportPayer {
+  traineeId: string;
+  name: string;
+  due: number;
+  paid: number;
+  remaining: number;
+}
+
+export interface MonthlyReport {
+  month: string;
+  from: string;
+  to: string;
+  generatedAt: string;
+  timezone: string;
+  /** The month isn't over: figures so far. */
+  partial: boolean;
+  financial: {
+    traineePayments: number;
+    shopSales: number;
+    refunds: number;
+    shopNet: number;
+    income: number;
+    expenses: number;
+    net: number;
+    byType: Record<string, number>;
+    byCategory: Record<string, number>;
+    byMethod: Record<string, number>;
+    counts: Record<string, number>;
+    previous: { income: number; outgoings: number; net: number };
+    incomeChangePct: number | null;
+    expensesChangePct: number | null;
+    netChangePct: number | null;
+  };
+  subscriptions: {
+    billed: number;
+    totalBilled: number;
+    paidTowardPeriod: number;
+    outstanding: number;
+    paid: number;
+    partial: number;
+    unpaid: number;
+    waived: number;
+    unverified: number;
+    unverifiedPaid: number;
+    partialPayers: ReportPayer[];
+    unpaidPayers: ReportPayer[];
+  };
+  trainees: { activeAtMonthEnd: number; joined: number; inactivated: number; attended: number };
+  sessions: {
+    total: number;
+    scheduled: number;
+    completed: number;
+    cancelled: number;
+    group: number;
+    private: number;
+    started: number;
+    notMarkedDone: number;
+    completionPct: number | null;
+    seriesCreated: number;
+    series: { seriesId: string; title: string; completed: number; planned: number; inMonth: number }[];
+    plansActive: number;
+    planCredits: number;
+    planRemaining: number;
+  };
+  attendance: {
+    attended: number;
+    noShow: number;
+    unmarked: number;
+    bookedAhead: number;
+    people: number;
+    noShowPeople: number;
+    ratePct: number | null;
+    cappedClasses: number;
+    cappedBooked: number;
+    cappedCapacity: number;
+    occupancyPct: number | null;
+  };
+  inventory: {
+    unitsSold: number;
+    salesRevenue: number;
+    unitsReturned: number;
+    refunds: number;
+    topByUnits: { itemId: string; name: string; units: number; revenue: number }[];
+    topByRevenue: { itemId: string; name: string; units: number; revenue: number }[];
+    lowNow: number;
+    outNow: number;
+    stock: { itemId: string; name: string; atMonthEnd: number | null; now: number }[];
+  };
+}

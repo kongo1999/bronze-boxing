@@ -163,6 +163,10 @@ func TestPartialReturnsRestockRefundAndCap(t *testing.T) {
 	if fin.Income != 20 {
 		t.Fatalf("income = %v, want 30 sold - 10 refunded", fin.Income)
 	}
+	// The refund goes back the way the sale was paid: card, not cash.
+	if fin.ByMethod["card"] != 20 || fin.ByMethod["cash"] != 0 {
+		t.Fatalf("byMethod = %v, want card 20 and no cash", fin.ByMethod)
+	}
 
 	// Two returns of 2 race for the 2 units still out: exactly one wins.
 	var wg sync.WaitGroup

@@ -185,9 +185,12 @@ func loadLedger(ctx context.Context, store *db.Store, from, to time.Time) ([]led
 		for _, r := range returns {
 			saleIDs = append(saleIDs, r.Sale)
 		}
+		// A refund goes back the way the sale was paid; a voided sale takes
+		// its returns with it.
 		voidedSale := map[primitive.ObjectID]bool{}
-		cur, err := store.Coll(models.CollSales).Find(ctx, bson.M{"_id": bson.M{"$in": saleIDs}, "voidedAt": bson.M{"$ne": nil}},
-			options.Find().SetProjection(bson.M{"_id": 1}))
+		saleMethod := map[primitive.ObjectID]string{}
+		cur, err := store.Coll(models.CollSales).Find(ctx, bson.M{"_id": bson.M{"$in": saleIDs}},
+			options.Find().SetProjection(bson.M{"_id": 1, "voidedAt": 1, "method": 1}))
 		if err != nil {
 			return nil, err
 		}
@@ -196,11 +199,12 @@ func loadLedger(ctx context.Context, store *db.Store, from, to time.Time) ([]led
 			return nil, err
 		}
 		for _, s := range vs {
-			voidedSale[s.ID] = true
+			voidedSale[s.ID] = s.VoidedAt != nil
+			saleMethod[s.ID] = s.Method
 		}
 		for _, rt := range returns {
 			rows = append(rows, ledgerRow{
-				Kind: "return", ID: rt.ID.Hex(), Sale: rt.Sale.Hex(), Date: rt.Date,
+				Kind: "return", ID: rt.ID.Hex(), Sale: rt.Sale.Hex(), Date: rt.Date, Method: saleMethod[rt.Sale],
 				Detail: fmt.Sprintf("%s × %d returned", rt.ItemName, rt.Qty), Type: "return", Note: rt.Reason,
 				inCents: -models.Cents(rt.Amount), Voided: voidedSale[rt.Sale],
 				VoidReason: map[bool]string{true: "sale voided"}[voidedSale[rt.Sale]],

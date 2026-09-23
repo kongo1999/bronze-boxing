@@ -142,6 +142,16 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | GET | `/search?q=&kinds=&limit=5&offset=` | `{query, groups[{kind, total, hasMore, items[{kind, id, label, sub, date, amount, flag, score, typo, month, trainee}]}], didYouMean?}` — kinds: trainee, session, payment, sale, item, expense, reminder (in that order). `flag` marks void / archived / inactive / cancelled / completed / done records. `didYouMean` is set when every match needed a typo. |
 | GET | `/audit/:entity/:id` | `entity` ∈ payment, expense, sale, charge, item, trainee, series, session, plan. Lines carry `actor` and `reason`. |
 
+### Monthly report
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (active at month end from effective-dated terms, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned, plans active / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold, revenue, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. |
+| GET | `/reports/monthly/export?m=` | The same report as CSV (Section, Metric, Value) |
+
+Shop refunds are attributed to the payment method of the sale they refund
+(a card sale's refund is card, not cash), in the ledger, the method split
+and the cash closing.
+
 ### Search
 
 One matcher everywhere — `backend/internal/fuzzy` and its twin

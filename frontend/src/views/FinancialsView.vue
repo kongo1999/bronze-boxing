@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { Plus, Download, Scale, X, ChevronRight, TrendingUp, TrendingDown } from "lucide-vue-next";
+import { Plus, Download, Scale, X, ChevronRight, TrendingUp, TrendingDown, FileBarChart } from "lucide-vue-next";
 import { api, errMsg, qs } from "@/lib/api";
 import { readCache, writeCache, invalidate } from "@/lib/cache";
 import type { Financials, LedgerPage, LedgerRow } from "@/lib/types";
@@ -277,9 +277,14 @@ const kindChips = [
   <div class="space-y-4">
     <PageHeader eyebrow="Whole business · money in & out" title="Financials">
       <template #action>
-        <RouterLink :to="withBack('/financials/reconcile', here, { m: mode === 'month' ? month : undefined })" :class="btnClasses('ghost', 'sm')">
-          <Scale class="h-4 w-4" /> Count cash
-        </RouterLink>
+        <div class="flex gap-2">
+          <RouterLink :to="withBack('/reports', here, { m: mode === 'month' ? month : undefined })" :class="btnClasses('ghost', 'sm')">
+            <FileBarChart class="h-4 w-4" /> Report
+          </RouterLink>
+          <RouterLink :to="withBack('/financials/reconcile', here, { m: mode === 'month' ? month : undefined })" :class="btnClasses('ghost', 'sm')">
+            <Scale class="h-4 w-4" /> Count cash
+          </RouterLink>
+        </div>
       </template>
     </PageHeader>
 
