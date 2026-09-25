@@ -372,7 +372,7 @@ function report(month: string): MonthlyReport {
     }
   }
   const seriesIds = [...new Set(kept.map((x) => x.seriesId).filter((x): x is string => !!x))];
-  const monthSales = live(sales).filter((x) => inMonth(x.date, month) && !x.paymentId);
+  const monthSales = live(sales).filter((x) => inMonth(x.date, month));
   const byItem = new Map<string, { itemId: string; name: string; units: number; revenue: number }>();
   for (const x of monthSales) {
     const it = byItem.get(x.item) ?? { itemId: x.item, name: x.itemName, units: 0, revenue: 0 };
@@ -400,6 +400,7 @@ function report(month: string): MonthlyReport {
     },
     trainees: {
       activeAtMonthEnd: trainees.filter((t) => t.status === "active" && t.createdAt < monthEnd).length,
+      unknownAtMonthEnd: 0,
       joined: trainees.filter((t) => inMonth(t.createdAt, month)).length,
       inactivated: trainees.filter((t) => t.archivedAt && inMonth(t.archivedAt, month)).length,
       attended: attendedBy.size,
@@ -412,6 +413,7 @@ function report(month: string): MonthlyReport {
       seriesCreated: seriesDocs.filter((d) => inMonth(d.createdAt, month)).length,
       series: seriesIds.map((id) => { const p = seriesProgress(id); return { seriesId: id, title: p.title, completed: p.completed, planned: p.planned, inMonth: kept.filter((x) => x.seriesId === id).length }; }),
       plansActive: active.length,
+      plansUnknown: 0,
       planCredits: sessions.filter((x) => inMonth(x.start, month) && x.status === "completed").reduce((n, x) => n + x.attendees.filter((a) => a.planId && a.status === "attended").length, 0),
       planRemaining: active.reduce((n, p) => n + planProgress(p).remaining, 0),
     },
@@ -421,6 +423,7 @@ function report(month: string): MonthlyReport {
     },
     inventory: {
       unitsSold: monthSales.reduce((n, x) => n + x.qty, 0), salesRevenue: amt(monthSales.reduce((n, x) => n + cents(x.total), 0)),
+      legacyLinkedSales: monthSales.filter((x) => !!x.paymentId).length,
       unitsReturned: monthReturns.reduce((n, r) => n + r.qty, 0), refunds: amt(monthReturns.reduce((n, r) => n + cents(r.amount), 0)),
       topByUnits: [...items].sort((a, b) => b.units - a.units || a.name.localeCompare(b.name)).slice(0, 5),
       topByRevenue: [...items].sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name)).slice(0, 5),
@@ -808,7 +811,10 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     const id = seg[1];
     const it = inventory.find((x) => x.id === id);
     if (!it) fail(404, "ITEM_NOT_FOUND", "item not found");
-    if (seg[2] === "movements") return r(movements.filter((m) => m.item === id).sort((a, b) => b.at.localeCompare(a.at)));
+    if (seg[2] === "movements") {
+      const rows = movements.filter((m) => m.item === id).sort((a, b) => b.at.localeCompare(a.at));
+      return r(listOrPage(searched(rows, q, (m) => [m.kind, m.reason, m.actor, m.itemName]), params));
+    }
     if (seg[2] === "archive" || seg[2] === "unarchive") { it.active = seg[2] === "unarchive"; return r(it); }
     if (seg[2] === "adjustments") {
       const before = { ...it };

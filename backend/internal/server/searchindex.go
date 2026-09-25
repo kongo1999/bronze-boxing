@@ -35,6 +35,7 @@ const (
 	kindItem     = "item"
 	kindExpense  = "expense"
 	kindReminder = "reminder"
+	kindMovement = "movement" // item history search; omitted from global groups
 )
 
 // collSearchSync holds throwaway markers: a search writes one and reads the
@@ -53,6 +54,7 @@ var kindOfColl = map[string]string{
 	models.CollInventory: kindItem,
 	models.CollExpenses:  kindExpense,
 	models.CollReminders: kindReminder,
+	models.CollMovements: kindMovement,
 }
 
 // searchHit is one result as the API returns it.
@@ -79,11 +81,12 @@ type searchEntry struct {
 }
 
 type searchIndex struct {
-	store   *db.Store
-	mu      sync.Mutex
-	entries map[string]map[primitive.ObjectID]*searchEntry
-	cs      *mongo.ChangeStream
-	built   time.Time
+	store    *db.Store
+	mu       sync.Mutex
+	entries  map[string]map[primitive.ObjectID]*searchEntry
+	postings map[string]map[string]map[primitive.ObjectID]struct{}
+	cs       *mongo.ChangeStream
+	built    time.Time
 }
 
 func newSearchIndex(store *db.Store) *searchIndex {
@@ -188,8 +191,111 @@ func (x *searchIndex) rebuild(ctx context.Context) error {
 		_ = cur.Close(ctx)
 	}
 	x.entries = entries
+	x.postings = map[string]map[string]map[primitive.ObjectID]struct{}{}
+	for kind, group := range entries {
+		for id, entry := range group {
+			x.addPostings(kind, id, entry)
+		}
+	}
 	x.built = time.Now()
 	return nil
+}
+
+// The posting lists narrow typo-tolerant ranking to plausible records. A
+// matching word shares a character pair with the query except for short
+// typo cases, which use their first character. Final acceptance and
+// ordering still use fuzzy.Match, so search semantics do not change.
+func searchKeys(word string) []string {
+	r := []rune(word)
+	if len(r) == 0 {
+		return nil
+	}
+	keys := []string{"first:" + string(r[0])}
+	for i := 0; i+1 < len(r); i++ {
+		keys = append(keys, "pair:"+string(r[i:i+2]))
+	}
+	return keys
+}
+
+func queryKeys(word string) []string {
+	r := []rune(word)
+	if len(r) == 0 {
+		return nil
+	}
+	keys := []string{}
+	// A three-letter typo must keep its first character. A four-letter
+	// middle transposition can change every pair; both need the fallback.
+	if len(r) == 1 || len(r) == 3 && !onlyDigits(word) || len(r) == 4 && !onlyDigits(word) {
+		keys = append(keys, "first:"+string(r[0]))
+	}
+	for i := 0; i+1 < len(r); i++ {
+		keys = append(keys, "pair:"+string(r[i:i+2]))
+	}
+	return keys
+}
+
+func onlyDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func (x *searchIndex) addPostings(kind string, id primitive.ObjectID, entry *searchEntry) {
+	if x.postings[kind] == nil {
+		x.postings[kind] = map[string]map[primitive.ObjectID]struct{}{}
+	}
+	for _, word := range entry.target.IndexWords() {
+		for _, key := range searchKeys(word) {
+			if x.postings[kind][key] == nil {
+				x.postings[kind][key] = map[primitive.ObjectID]struct{}{}
+			}
+			x.postings[kind][key][id] = struct{}{}
+		}
+	}
+}
+
+func (x *searchIndex) removeEntry(kind string, id primitive.ObjectID) {
+	if old := x.entries[kind][id]; old != nil {
+		for _, word := range old.target.IndexWords() {
+			for _, key := range searchKeys(word) {
+				delete(x.postings[kind][key], id)
+				if len(x.postings[kind][key]) == 0 {
+					delete(x.postings[kind], key)
+				}
+			}
+		}
+	}
+	delete(x.entries[kind], id)
+}
+
+func (x *searchIndex) candidateIDs(kind string, q fuzzy.Query) map[primitive.ObjectID]struct{} {
+	var candidates map[primitive.ObjectID]struct{}
+	for _, alternatives := range q.IndexTerms() {
+		wordCandidates := map[primitive.ObjectID]struct{}{}
+		for _, word := range alternatives {
+			for _, key := range queryKeys(word) {
+				for id := range x.postings[kind][key] {
+					wordCandidates[id] = struct{}{}
+				}
+			}
+		}
+		if candidates == nil {
+			candidates = wordCandidates
+		} else {
+			for id := range candidates {
+				if _, ok := wordCandidates[id]; !ok {
+					delete(candidates, id)
+				}
+			}
+		}
+		if len(candidates) == 0 {
+			break
+		}
+	}
+	return candidates
 }
 
 // apply folds one change event into the index; false asks for a rebuild
@@ -215,16 +321,18 @@ func (x *searchIndex) apply(raw bson.Raw) bool {
 			return true
 		}
 		if len(ev.Full) == 0 { // deleted again before we looked it up
-			delete(x.entries[kind], ev.Key.ID)
+			x.removeEntry(kind, ev.Key.ID)
 			return true
 		}
+		x.removeEntry(kind, ev.Key.ID)
 		if e := buildEntry(kind, ev.Full); e != nil {
 			x.entries[kind][ev.Key.ID] = e
+			x.addPostings(kind, ev.Key.ID, e)
 		}
 		return true
 	case "delete":
 		if ok {
-			delete(x.entries[kind], ev.Key.ID)
+			x.removeEntry(kind, ev.Key.ID)
 		}
 		return true
 	default: // drop, rename, dropDatabase, invalidate
@@ -246,7 +354,11 @@ func (x *searchIndex) search(ctx context.Context, q fuzzy.Query, kinds ...string
 			primary string
 		}
 		var got []scored
-		for _, e := range x.entries[kind] {
+		for id := range x.candidateIDs(kind, q) {
+			e := x.entries[kind][id]
+			if e == nil {
+				continue
+			}
 			r := fuzzy.Match(q, e.target)
 			if r.Score < fuzzy.MinScore {
 				continue
@@ -418,6 +530,15 @@ func buildEntry(kind string, raw bson.Raw) *searchEntry {
 		return &searchEntry{
 			hit:    searchHit{Kind: kind, ID: r.ID.Hex(), Label: r.Title, Sub: r.RelatedLabel, Date: r.DueDate, Flag: flag},
 			target: fuzzy.NewTarget(r.Title, r.RelatedLabel),
+		}
+	case kindMovement:
+		var m models.StockMovement
+		if bson.Unmarshal(raw, &m) != nil {
+			return nil
+		}
+		return &searchEntry{
+			hit:    searchHit{Kind: kind, ID: m.ID.Hex(), Label: m.ItemName, Sub: m.Kind, Date: m.At},
+			target: fuzzy.NewTarget(m.Kind, m.Reason, m.Actor, m.ItemName),
 		}
 	}
 	return nil

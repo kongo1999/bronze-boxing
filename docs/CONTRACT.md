@@ -107,7 +107,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | POST | `/inventory/:id/archive` \| `/unarchive` | `{reason?}` — archived items can't be sold (`ITEM_INACTIVE`); history kept; audited |
 | POST | `/inventory/:id/adjustments` | `{kind: "restock", qty, unitCost?}` · `{kind: "damage", qty, reason}` · `{kind: "correction", count, expected?, reason}` — one transaction: stock, ledger line, audit. A write-off can't exceed stock (`INSUFFICIENT_STOCK`); a correction whose `expected` no longer matches is `CONFLICT`. Returns `{item, movement}` |
 | POST | `/inventory/:id/sell` | `{qty ≥ 1, trainee?, method?, unitPrice?, priceReason?}` — one transaction: stock, sale (snapshots `unitCost`, `listPrice`), ledger line, audit. A price different from the list price needs `priceReason` ([sale](fixtures/sale.json)) |
-| GET | `/inventory/:id/movements?limit=` | Stock ledger, newest first ([sample](fixtures/stock-movements.json)) |
+| GET | `/inventory/:id/movements?q=&limit=&offset=` | Stock ledger, newest first; fuzzy search by action, reason, actor or item. With `limit`, returns `{items,total,hasMore,offset,limit}`; without it, the original array ([sample](fixtures/stock-movements.json)) |
 | GET | `/sales?from=&to=&trainee=&item=&limit=&offset=` | Newest first; a page with `limit` |
 | GET/PUT | `/sales/:id` | A quantity change needs `reason`; can't go below what was returned |
 | POST | `/sales/:id/returns` | `{qty, amount?, reason, day?}` — partial return: restocks `qty`, records the refund (default qty × unit price) as money out on `day` (not in the future). Capped by units still out and money not yet refunded (`RETURN_EXCEEDS_SALE`); guarded against racing returns; refused on a voided sale. Returns `{return, sale, restocked}` |
@@ -145,7 +145,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Monthly report
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (active at month end from effective-dated terms, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned, plans active / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold, revenue, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. |
+| GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (verified active at the report cutoff, `unknownAtMonthEnd` for legacy months before membership history began, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned, plans active from their audited state / `plansUnknown` when past state is unavailable / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold and revenue including sales linked to legacy payments, `legacyLinkedSales` count, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. Cash for a linked legacy sale remains counted once as its payment. |
 | GET | `/reports/monthly/export?m=` | The same report as CSV (Section, Metric, Value) |
 
 Shop refunds are attributed to the payment method of the sale they refund
@@ -164,13 +164,16 @@ longer ones; digits match exactly (phone fragments, references); words may be
 in any order; `PT` = private, `no show` = no-show, `tee` = t-shirt. Every
 query word must match, so unrelated records never appear.
 
-`?q=` on `/trainees`, `/payments`, `/sessions`, `/sales` and `/ledger`
+`?q=` on `/trainees`, `/payments`, `/sessions`, `/sales`, item stock movements and `/ledger`
 searches the whole filtered list on the server and returns it best match
 first, then pages it (`limit`/`offset` as usual) — a match that would sit on
 page five is still found. The list's other filters still apply.
 
-The server keeps an in-memory index of every searchable record, built on
-first use and kept current from a MongoDB change stream; before each search
+The server keeps an in-memory posting index of normalized character pairs
+and short-word prefixes for searchable records, built on first use. Ranking
+visits only plausible candidates; paged lists apply their database filters
+in bounded ID batches and fetch only the requested page as full documents.
+The index is kept current from a MongoDB change stream; before each search
 it writes a marker to `search_sync` and reads the stream up to it, so a
 write acknowledged before the search is always reflected (no stale results,
 whatever code path or tool made the write). Without a replica set (dev-only)

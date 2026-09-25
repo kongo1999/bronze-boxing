@@ -129,3 +129,24 @@ test("the monthly report exports the same month as CSV", async ({ page }) => {
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "CSV" }).click()]);
   expect(download.suggestedFilename()).toMatch(/^report-\d{4}-\d{2}\.csv$/);
 });
+
+test("item history searches stock actions and a trainee can jump to an older dues month", async ({ page, request }) => {
+  const tag = uniq();
+  const item = await (await request.post("/api/inventory", { data: {
+    name: `Training Bag ${tag}`, price: 20, stock: 3,
+  } })).json();
+  const adjust = await request.post(`/api/inventory/${item.id}/adjustments`, { data: {
+    kind: "restock", qty: 1, reason: `Special shipment ${tag}`,
+  } });
+  expect(adjust.ok()).toBeTruthy();
+  await page.goto(`/inventory/${item.id}`);
+  await page.getByLabel("Search this item's history").fill("shipmnt");
+  await expect(page.getByText(`Special shipment ${tag}`)).toBeVisible();
+  await expect(page.getByText("Stock history · 1")).toBeVisible();
+
+  const trainee = await addTrainee(request, `Older Dues ${tag}`, 50);
+  await page.goto(`/trainees/${trainee.id}`);
+  const olderMonth = "2024-03";
+  await page.locator('input[type="month"][aria-label="Dues month"]').fill(olderMonth);
+  await expect(page.getByText("March 2024")).toBeVisible();
+});

@@ -20,6 +20,8 @@ import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import Badge from "@/components/ui/Badge.vue";
 import { btnClasses } from "@/components/ui/button";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
 
 const route = useRoute();
 const here = computed(() => route.fullPath);
@@ -58,11 +60,15 @@ async function exportCSV() {
   }
 }
 function printIt() {
+  payerQ.value = "";
   window.print();
 }
 
 const f = computed(() => rep.value?.financial);
 const s = computed(() => rep.value?.subscriptions);
+const payerQ = ref("");
+const partialPayers = computed(() => fuzzyFilter(s.value?.partialPayers ?? [], payerQ.value, (p) => [p.name]));
+const unpaidPayers = computed(() => fuzzyFilter(s.value?.unpaidPayers ?? [], payerQ.value, (p) => [p.name]));
 const ss = computed(() => rep.value?.sessions);
 const at = computed(() => rep.value?.attendance);
 const inv = computed(() => rep.value?.inventory);
@@ -183,9 +189,12 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
           <Badge v-if="s.waived" tone="neutral">{{ s.waived }} waived</Badge>
           <Badge v-if="s.unverified" tone="info">{{ s.unverified }} unverified (imported, outside these totals)</Badge>
         </div>
+        <SearchInput v-if="s.partialPayers.length + s.unpaidPayers.length >= 8" v-model="payerQ"
+          label="Search people with dues" placeholder="Search partial and unpaid trainees…"
+          :matches="payerQ ? partialPayers.length + unpaidPayers.length : undefined" data-print-hide />
         <div v-if="s.partialPayers.length" class="space-y-1">
           <p class="label-eyebrow text-[0.6rem] text-faint">Partly paid — not counted as paid</p>
-          <div v-for="p in s.partialPayers" :key="p.traineeId" class="flex items-center gap-2 text-sm">
+          <div v-for="p in partialPayers" :key="p.traineeId" class="flex items-center gap-2 text-sm">
             <RouterLink :to="withBack(`/trainees/${p.traineeId}`, here)" class="min-w-0 flex-1 truncate hover:underline">{{ p.name }}</RouterLink>
             <span class="shrink-0 text-xs text-faint tnum">{{ money(p.paid) }} of {{ money(p.due) }}</span>
             <RouterLink :to="collectLink(p)" class="min-h-10 shrink-0 content-center px-1 text-sm font-medium text-bronze hover:underline" data-print-hide>Collect {{ money(p.remaining) }}</RouterLink>
@@ -194,7 +203,7 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
         </div>
         <details v-if="s.unpaidPayers.length" class="text-sm">
           <summary class="min-h-10 cursor-pointer content-center font-medium text-bronze">Unpaid · {{ s.unpaidPayers.length }}</summary>
-          <div v-for="p in s.unpaidPayers" :key="p.traineeId" class="flex items-center gap-2">
+          <div v-for="p in unpaidPayers" :key="p.traineeId" class="flex items-center gap-2">
             <RouterLink :to="withBack(`/trainees/${p.traineeId}`, here)" class="min-w-0 flex-1 truncate hover:underline">{{ p.name }}</RouterLink>
             <RouterLink :to="collectLink(p)" class="min-h-10 shrink-0 content-center px-1 font-medium text-bronze hover:underline" data-print-hide>Collect {{ money(p.remaining) }}</RouterLink>
           </div>
@@ -206,12 +215,13 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
         <Card class="space-y-2 p-4">
           <h3 class="font-display text-lg font-semibold">Trainees</h3>
           <dl class="space-y-1 text-sm">
-            <div class="flex justify-between"><dt class="text-muted">Active at month end</dt><dd class="tnum">{{ rep.trainees.activeAtMonthEnd }}</dd></div>
+            <div class="flex justify-between"><dt class="text-muted">{{ rep.partial ? 'Active so far' : 'Active at month end' }}</dt><dd class="tnum">{{ rep.trainees.activeAtMonthEnd }}</dd></div>
+            <div v-if="rep.trainees.unknownAtMonthEnd" class="flex justify-between text-info"><dt>Status unknown before tracking began</dt><dd class="tnum">{{ rep.trainees.unknownAtMonthEnd }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Joined</dt><dd class="tnum">{{ rep.trainees.joined }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Went inactive or archived</dt><dd class="tnum">{{ rep.trainees.inactivated }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Came to at least one class</dt><dd class="tnum">{{ rep.trainees.attended }}</dd></div>
           </dl>
-          <p class="text-[0.6875rem] text-faint">Active is read from each trainee's dated membership record, not today's profile.</p>
+          <p class="text-[0.6875rem] text-faint">Active uses dated membership records. Statuses before the first reliable record are shown as unknown.</p>
         </Card>
 
         <Card class="space-y-2 p-4">
@@ -229,7 +239,8 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
             </div>
             <div v-if="ss.notMarkedDone" class="flex justify-between text-partial"><dt>Begun but not marked done</dt><dd class="tnum">{{ ss.notMarkedDone }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Series started</dt><dd class="tnum">{{ ss.seriesCreated }}</dd></div>
-            <div class="flex justify-between"><dt class="text-muted">Active plans at month end</dt><dd class="tnum">{{ ss.plansActive }}</dd></div>
+            <div class="flex justify-between"><dt class="text-muted">{{ rep.partial ? 'Active plans so far' : 'Active plans at month end' }}</dt><dd class="tnum">{{ ss.plansActive }}</dd></div>
+            <div v-if="ss.plansUnknown" class="flex justify-between text-info"><dt>Plan history unknown</dt><dd class="tnum">{{ ss.plansUnknown }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Plan sessions earned · still owed</dt><dd class="tnum">{{ ss.planCredits }} · {{ ss.planRemaining }}</dd></div>
           </dl>
           <details v-if="ss.series.length" class="text-sm">
@@ -272,6 +283,7 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
           <dl class="space-y-1 text-sm">
             <div class="flex justify-between"><dt class="text-muted">Units sold</dt><dd class="tnum">{{ inv.unitsSold }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Sales revenue</dt><dd class="tnum">{{ money(inv.salesRevenue) }}</dd></div>
+            <div v-if="inv.legacyLinkedSales" class="text-xs text-faint">Includes {{ inv.legacyLinkedSales }} older sale{{ inv.legacyLinkedSales === 1 ? '' : 's' }} linked to payments; their cash is counted once in the Cash section.</div>
             <div class="flex justify-between"><dt class="text-muted">Returned · refunded</dt><dd class="tnum">{{ inv.unitsReturned }} · {{ money(inv.refunds) }}</dd></div>
             <div class="flex justify-between"><dt class="text-muted">Low · out of stock <span class="text-[0.6875rem] text-faint">(now, not at month end)</span></dt><dd class="tnum">{{ inv.lowNow }} · {{ inv.outNow }}</dd></div>
           </dl>

@@ -137,6 +137,10 @@ func NewQuery(q string) Query {
 // Empty reports whether there is nothing to search for.
 func (q Query) Empty() bool { return len(q.Words) == 0 }
 
+// IndexTerms returns each query word and its interchangeable aliases for
+// candidate lookup. Final ranking still uses Match.
+func (q Query) IndexTerms() [][]string { return q.alts }
+
 // Target is a prepared record: its main text (a name or title) and any
 // other searchable fields.
 type Target struct {
@@ -162,6 +166,12 @@ func NewTarget(primary string, others ...string) Target {
 		}
 	}
 	return t
+}
+
+// IndexWords returns the normalized terms that can provide search candidates.
+// Digit runs include punctuation-free phone numbers and references.
+func (t Target) IndexWords() []string {
+	return append(append([]string{}, t.words...), t.digits...)
 }
 
 // Result says how well a target matched.

@@ -335,17 +335,13 @@ func (h *inventoryHandler) movements(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	cur, err := h.store.Coll(models.CollMovements).Find(ctx, bson.M{"item": id},
-		options.Find().SetSort(bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}}).
-			SetLimit(int64(min(max(atoiDefault(c.Query("limit"), 200), 1), 1000))))
-	if err != nil {
-		return err
+	filter := bson.M{"item": id}
+	if q, ok := searchQuery(c); ok {
+		return rankedFind(c, ctx, h.store, models.CollMovements, kindMovement, filter, q,
+			func(m models.StockMovement) primitive.ObjectID { return m.ID })
 	}
-	out := []models.StockMovement{}
-	if err := cur.All(ctx, &out); err != nil {
-		return err
-	}
-	return c.JSON(out)
+	return pagedFind[models.StockMovement](c, ctx, h.store.Coll(models.CollMovements), filter,
+		bson.D{{Key: "at", Value: -1}, {Key: "_id", Value: -1}})
 }
 
 type sellInput struct {

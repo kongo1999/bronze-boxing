@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"bronzeboxing/internal/db"
 	"bronzeboxing/internal/fuzzy"
@@ -85,33 +86,84 @@ func rankedFind[T any](c *fiber.Ctx, ctx context.Context, store *db.Store, coll,
 	if err != nil {
 		return err
 	}
-	pos := make(map[primitive.ObjectID]int, len(ids))
-	for i, id := range ids {
-		pos[id] = i
-	}
-	f := bson.M{}
-	for k, v := range filter {
-		f[k] = v
-	}
-	f["_id"] = bson.M{"$in": ids}
-	cur, err := store.Coll(coll).Find(ctx, f)
-	if err != nil {
-		return err
-	}
-	docs := []T{}
-	if err := cur.All(ctx, &docs); err != nil {
-		return err
-	}
-	sort.SliceStable(docs, func(i, j int) bool { return pos[idOf(docs[i])] < pos[idOf(docs[j])] })
 	if c.Query("limit") == "" {
+		f := bson.M{}
+		for k, v := range filter {
+			f[k] = v
+		}
+		f["_id"] = bson.M{"$in": ids}
+		cur, err := store.Coll(coll).Find(ctx, f)
+		if err != nil {
+			return err
+		}
+		docs := []T{}
+		if err := cur.All(ctx, &docs); err != nil {
+			return err
+		}
+		pos := make(map[primitive.ObjectID]int, len(ids))
+		for i, id := range ids {
+			pos[id] = i
+		}
+		sort.SliceStable(docs, func(i, j int) bool { return pos[idOf(docs[i])] < pos[idOf(docs[j])] })
 		return c.JSON(docs)
 	}
 	limit := min(max(atoiDefault(c.Query("limit"), 20), 1), 200)
 	offset := max(atoiDefault(c.Query("offset"), 0), 0)
-	end := min(offset+limit, len(docs))
-	items := []T{}
-	if offset < len(docs) {
-		items = docs[offset:end]
+	// Test the list's filters in bounded ID batches. Only matching IDs for
+	// this page are fetched as full documents; a broad fuzzy term never loads
+	// the entire matching collection into Go before pagination.
+	selected := make([]primitive.ObjectID, 0, limit)
+	var total int64
+	for start := 0; start < len(ids); start += 400 {
+		end := min(start+400, len(ids))
+		f := bson.M{}
+		for k, v := range filter {
+			f[k] = v
+		}
+		f["_id"] = bson.M{"$in": ids[start:end]}
+		cur, err := store.Coll(coll).Find(ctx, f, options.Find().SetProjection(bson.M{"_id": 1}))
+		if err != nil {
+			return err
+		}
+		var found []struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if err := cur.All(ctx, &found); err != nil {
+			return err
+		}
+		has := make(map[primitive.ObjectID]struct{}, len(found))
+		for _, doc := range found {
+			has[doc.ID] = struct{}{}
+		}
+		for _, id := range ids[start:end] {
+			if _, ok := has[id]; !ok {
+				continue
+			}
+			if total >= int64(offset) && len(selected) < limit {
+				selected = append(selected, id)
+			}
+			total++
+		}
 	}
-	return c.JSON(page[T]{Items: items, Total: int64(len(docs)), HasMore: end < len(docs), Offset: offset, Limit: limit})
+	items := []T{}
+	if len(selected) > 0 {
+		f := bson.M{}
+		for k, v := range filter {
+			f[k] = v
+		}
+		f["_id"] = bson.M{"$in": selected}
+		cur, err := store.Coll(coll).Find(ctx, f)
+		if err != nil {
+			return err
+		}
+		if err := cur.All(ctx, &items); err != nil {
+			return err
+		}
+		pos := make(map[primitive.ObjectID]int, len(selected))
+		for i, id := range selected {
+			pos[id] = i
+		}
+		sort.SliceStable(items, func(i, j int) bool { return pos[idOf(items[i])] < pos[idOf(items[j])] })
+	}
+	return c.JSON(page[T]{Items: items, Total: total, HasMore: int64(offset+len(items)) < total, Offset: offset, Limit: limit})
 }

@@ -1,13 +1,16 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
+	"bronzeboxing/internal/fuzzy"
 	"bronzeboxing/internal/models"
 )
 
@@ -201,5 +204,128 @@ func TestListSearchFindsMatchesBeyondPageOne(t *testing.T) {
 	e.ok("GET", "/ledger?m="+month+"&q="+url.QueryEscape("zeyna"), nil, &led)
 	if led.Total != 1 {
 		t.Fatalf("ledger search total = %d", led.Total)
+	}
+}
+
+func TestSearchPostingsPreserveFuzzyMatches(t *testing.T) {
+	idx := &searchIndex{entries: map[string]map[primitive.ObjectID]*searchEntry{kindTrainee: {}},
+		postings: map[string]map[string]map[primitive.ObjectID]struct{}{}}
+	targets := []fuzzy.Target{
+		fuzzy.NewTarget("Zeina Khalil", "71 555 666"),
+		fuzzy.NewTarget("Jad Saliba"),
+		fuzzy.NewTarget("Private session"),
+		fuzzy.NewTarget("No-show reminder"),
+		fuzzy.NewTarget("Boxing T-shirt"),
+	}
+	for _, target := range targets {
+		id := primitive.NewObjectID()
+		entry := &searchEntry{target: target}
+		idx.entries[kindTrainee][id] = entry
+		idx.addPostings(kindTrainee, id, entry)
+	}
+	queries := []string{"zeina", "zeyna", "ezina", "ziena", "khalil", "jda", "pt", "private", "no show", "noshow", "tee", "5556", "boxing shirt"}
+	for _, raw := range queries {
+		q := fuzzy.NewQuery(raw)
+		got := idx.candidateIDs(kindTrainee, q)
+		for id, entry := range idx.entries[kindTrainee] {
+			if fuzzy.Match(q, entry.target).Score > 0 {
+				if _, ok := got[id]; !ok {
+					t.Fatalf("posting index missed %q for target %q", raw, entry.target.Primary)
+				}
+			}
+		}
+	}
+}
+
+func TestSearchPostingsCoverSharedFuzzyFixtures(t *testing.T) {
+	raw, err := os.ReadFile("../../../docs/fixtures/fuzzy-cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name    string     `json:"name"`
+			Q       string     `json:"q"`
+			Targets [][]string `json:"targets"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			idx := &searchIndex{entries: map[string]map[primitive.ObjectID]*searchEntry{kindTrainee: {}},
+				postings: map[string]map[string]map[primitive.ObjectID]struct{}{}}
+			for _, fields := range c.Targets {
+				id := primitive.NewObjectID()
+				entry := &searchEntry{target: fuzzy.NewTarget(fields[0], fields[1:]...)}
+				idx.entries[kindTrainee][id] = entry
+				idx.addPostings(kindTrainee, id, entry)
+			}
+			q := fuzzy.NewQuery(c.Q)
+			candidates := idx.candidateIDs(kindTrainee, q)
+			for id, entry := range idx.entries[kindTrainee] {
+				if fuzzy.Match(q, entry.target).Score > 0 {
+					if _, ok := candidates[id]; !ok {
+						t.Fatalf("missed %q for %q", c.Q, entry.target.Primary)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMovementHistorySearchAndPaging(t *testing.T) {
+	e := newEnv(t)
+	it := e.addItem("Heavy bag", 5, 10, 4)
+	id := oid(t, it.ID)
+	docs := make([]any, 0, 125)
+	for i := 0; i < 124; i++ {
+		docs = append(docs, models.StockMovement{ID: primitive.NewObjectID(), Item: id,
+			ItemName: "Heavy bag", Kind: models.MoveCorrection, Reason: fmt.Sprintf("Routine count %03d", i),
+			At: time.Now().Add(time.Duration(i) * time.Minute)})
+	}
+	docs = append(docs, models.StockMovement{ID: primitive.NewObjectID(), Item: id,
+		ItemName: "Heavy bag", Kind: models.MoveCorrection, Reason: "Misplaced stock found", At: time.Now().Add(-time.Hour)})
+	if _, err := e.store.Coll(models.CollMovements).InsertMany(e.ctx, docs); err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Items []models.StockMovement `json:"items"`
+		Total int                    `json:"total"`
+	}
+	e.ok("GET", "/inventory/"+it.ID+"/movements?limit=10&q=misplced", nil, &page)
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].Reason != "Misplaced stock found" {
+		t.Fatalf("movement search = %+v", page)
+	}
+	e.ok("GET", "/inventory/"+it.ID+"/movements?limit=10&offset=120", nil, &page)
+	if page.Total != 126 || len(page.Items) != 6 {
+		t.Fatalf("movement paging = total %d, items %d", page.Total, len(page.Items))
+	}
+}
+
+func BenchmarkSearchCandidates10000(b *testing.B) {
+	idx := &searchIndex{entries: map[string]map[primitive.ObjectID]*searchEntry{kindTrainee: {}},
+		postings: map[string]map[string]map[primitive.ObjectID]struct{}{}}
+	for i := 0; i < 10000; i++ {
+		id := primitive.NewObjectID()
+		entry := &searchEntry{target: fuzzy.NewTarget(fmt.Sprintf("Member %05d", i))}
+		idx.entries[kindTrainee][id] = entry
+		idx.addPostings(kindTrainee, id, entry)
+	}
+	id := primitive.NewObjectID()
+	entry := &searchEntry{target: fuzzy.NewTarget("Zeina Khalil")}
+	idx.entries[kindTrainee][id] = entry
+	idx.addPostings(kindTrainee, id, entry)
+	for _, raw := range []string{"zeyna khalil", "member 042"} {
+		b.Run(raw, func(b *testing.B) {
+			q := fuzzy.NewQuery(raw)
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				for id := range idx.candidateIDs(kindTrainee, q) {
+					_ = fuzzy.Match(q, idx.entries[kindTrainee][id].target)
+				}
+			}
+		})
 	}
 }

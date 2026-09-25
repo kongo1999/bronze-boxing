@@ -71,10 +71,11 @@ type reportSubs struct {
 }
 
 type reportTrainees struct {
-	ActiveAtMonthEnd int `json:"activeAtMonthEnd"` // from effective-dated terms
-	Joined           int `json:"joined"`
-	Inactivated      int `json:"inactivated"` // went inactive or were archived during the month
-	Attended         int `json:"attended"`    // distinct people who attended at least once
+	ActiveAtMonthEnd  int `json:"activeAtMonthEnd"`  // from effective-dated terms
+	UnknownAtMonthEnd int `json:"unknownAtMonthEnd"` // legacy status before dated history began
+	Joined            int `json:"joined"`
+	Inactivated       int `json:"inactivated"` // went inactive or were archived during the month
+	Attended          int `json:"attended"`    // distinct people who attended at least once
 }
 
 type reportSeries struct {
@@ -98,6 +99,7 @@ type reportSessions struct {
 	SeriesCreated int            `json:"seriesCreated"`
 	Series        []reportSeries `json:"series"`
 	PlansActive   int            `json:"plansActive"`   // at month end
+	PlansUnknown  int            `json:"plansUnknown"`  // no trustworthy historical state
 	PlanCredits   int            `json:"planCredits"`   // plan sessions earned in the month
 	PlanRemaining int            `json:"planRemaining"` // still owed on active plans at month end
 }
@@ -132,15 +134,16 @@ type reportStock struct {
 }
 
 type reportInventory struct {
-	UnitsSold     int           `json:"unitsSold"`
-	SalesRevenue  float64       `json:"salesRevenue"`
-	UnitsReturned int           `json:"unitsReturned"`
-	Refunds       float64       `json:"refunds"`
-	TopByUnits    []reportItem  `json:"topByUnits"`
-	TopByRevenue  []reportItem  `json:"topByRevenue"`
-	LowNow        int           `json:"lowNow"` // current state, not historical
-	OutNow        int           `json:"outNow"` // current state, not historical
-	Stock         []reportStock `json:"stock"`
+	UnitsSold         int           `json:"unitsSold"`
+	SalesRevenue      float64       `json:"salesRevenue"`
+	LegacyLinkedSales int           `json:"legacyLinkedSales"` // sale cash is represented by a linked payment
+	UnitsReturned     int           `json:"unitsReturned"`
+	Refunds           float64       `json:"refunds"`
+	TopByUnits        []reportItem  `json:"topByUnits"`
+	TopByRevenue      []reportItem  `json:"topByRevenue"`
+	LowNow            int           `json:"lowNow"` // current state, not historical
+	OutNow            int           `json:"outNow"` // current state, not historical
+	Stock             []reportStock `json:"stock"`
 }
 
 type monthlyReport struct {
@@ -329,7 +332,11 @@ func reportSubscriptions(ctx context.Context, store *db.Store, month string) (re
 // reportPeople fills the trainee, session and attendance sections from one
 // read of the month's sessions.
 func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from, to, now time.Time) error {
-	lastDay := models.DateKey(to.Add(-time.Nanosecond))
+	asOf := to.Add(-time.Nanosecond)
+	if now.Before(asOf) {
+		asOf = now // the current month is a report so far, not a forecast
+	}
+	lastDay := models.DateKey(asOf)
 	firstDay := models.DateKey(from)
 
 	// Trainees: status at month end from the effective-dated terms — never
@@ -347,8 +354,17 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 	inactivated := map[primitive.ObjectID]bool{}
 	for _, t := range trainees {
 		ts := terms[t.ID]
-		if st := statusTermOn(ts, lastDay); st != nil && st.Status == models.StatusActive {
-			rep.Trainees.ActiveAtMonthEnd++
+		if st := statusTermOn(ts, lastDay); st != nil {
+			// A migrated term copied today's status back to the join date. It
+			// establishes status only from the migration day onward; older
+			// months cannot honestly be called active or inactive.
+			if st.Source == "migrated" && asOf.Before(st.CreatedAt) {
+				rep.Trainees.UnknownAtMonthEnd++
+			} else if st.Status == models.StatusActive {
+				rep.Trainees.ActiveAtMonthEnd++
+			}
+		} else if !t.CreatedAt.After(asOf) {
+			rep.Trainees.UnknownAtMonthEnd++
 		}
 		if !t.CreatedAt.Before(from) && t.CreatedAt.Before(to) {
 			rep.Trainees.Joined++
@@ -498,6 +514,10 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 		return err
 	}
 	if len(plans) > 0 {
+		states, err := planStatesAt(ctx, store, plans, asOf)
+		if err != nil {
+			return err
+		}
 		credits, err := planCreditsBefore(ctx, store, to)
 		if err != nil {
 			return err
@@ -506,10 +526,16 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 		if err != nil {
 			return err
 		}
-		for _, p := range plans {
-			ss.PlanCredits += inMonth[p.ID]
-			activeAtEnd := p.StartDate <= lastDay && (p.EndDate == "" || p.EndDate >= firstDay) &&
-				(p.Status == "active" || (p.UpdatedAt.After(to) && p.CreatedAt.Before(to)))
+		for _, current := range plans {
+			p, known := states[current.ID]
+			ss.PlanCredits += inMonth[current.ID]
+			if !known {
+				if !current.CreatedAt.After(asOf) {
+					ss.PlansUnknown++
+				}
+				continue
+			}
+			activeAtEnd := p.StartDate <= lastDay && (p.EndDate == "" || p.EndDate >= lastDay) && p.Status == "active"
 			if !activeAtEnd {
 				continue
 			}
@@ -520,6 +546,48 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 		}
 	}
 	return nil
+}
+
+// planStatesAt reads the last audited plan state recorded by the report's
+// as-of instant. A current document updated later cannot establish an older
+// month's status, target or dates. Plans without audit history are usable only
+// when their current document has not changed since the requested instant.
+func planStatesAt(ctx context.Context, store *db.Store, plans []models.SessionPlan, asOf time.Time) (map[primitive.ObjectID]models.SessionPlan, error) {
+	out := map[primitive.ObjectID]models.SessionPlan{}
+	ids := make([]primitive.ObjectID, 0, len(plans))
+	for _, p := range plans {
+		ids = append(ids, p.ID)
+		if !p.CreatedAt.After(asOf) && !p.UpdatedAt.After(asOf) {
+			out[p.ID] = p
+		}
+	}
+	cur, err := store.Coll(models.CollAudit).Find(ctx, bson.M{
+		"entity": "plan", "ref": bson.M{"$in": ids}, "at": bson.M{"$lte": asOf},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var events []models.AuditEntry
+	if err := cur.All(ctx, &events); err != nil {
+		return nil, err
+	}
+	latest := map[primitive.ObjectID]time.Time{}
+	for _, event := range events {
+		if !event.At.After(latest[event.Ref]) || event.After == nil {
+			continue
+		}
+		raw, err := bson.Marshal(event.After)
+		if err != nil {
+			return nil, err
+		}
+		var state models.SessionPlan
+		if err := bson.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		out[event.Ref] = state
+		latest[event.Ref] = event.At
+	}
+	return out, nil
 }
 
 // planCreditsBetween counts, per plan, linked bookings the trainee attended
@@ -568,7 +636,7 @@ func reportShop(ctx context.Context, store *db.Store, from, to time.Time) (repor
 	var revenue int64
 	for _, s := range sales {
 		if s.PaymentID != nil {
-			continue // legacy mirror: counted as its payment in Financial
+			out.LegacyLinkedSales++ // still a physical shop sale; cash is deduplicated in Financial
 		}
 		out.UnitsSold += s.Qty
 		revenue += models.Cents(s.Total)
@@ -744,6 +812,7 @@ func reportCSV(r *monthlyReport) []byte {
 	}
 	t := r.Trainees
 	row("Trainees", "Active at month end", t.ActiveAtMonthEnd)
+	row("Trainees", "Status unknown at month end (before tracking began)", t.UnknownAtMonthEnd)
 	row("Trainees", "Joined", t.Joined)
 	row("Trainees", "Went inactive or archived", t.Inactivated)
 	row("Trainees", "Attended at least once", t.Attended)
@@ -761,6 +830,7 @@ func reportCSV(r *monthlyReport) []byte {
 		row("Sessions", "Series: "+se.Title, fmt.Sprintf("%d/%d completed (%d this month)", se.Completed, se.Planned, se.InMonth))
 	}
 	row("Sessions", "Active plans at month end", ss.PlansActive)
+	row("Sessions", "Plan status unknown at month end", ss.PlansUnknown)
 	row("Sessions", "Plan sessions earned", ss.PlanCredits)
 	row("Sessions", "Plan sessions still owed", ss.PlanRemaining)
 	a := r.Attendance
@@ -775,6 +845,7 @@ func reportCSV(r *monthlyReport) []byte {
 	inv := r.Inventory
 	row("Shop", "Units sold", inv.UnitsSold)
 	row("Shop", "Sales revenue", inv.SalesRevenue)
+	row("Shop", "Sales linked to legacy payments", inv.LegacyLinkedSales)
 	row("Shop", "Units returned", inv.UnitsReturned)
 	row("Shop", "Refunds", inv.Refunds)
 	for _, it := range inv.TopByUnits {

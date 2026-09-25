@@ -23,6 +23,7 @@ import Button from "@/components/ui/Button.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import PlanCard from "@/components/PlanCard.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
 import Highlight from "@/components/ui/Highlight.vue";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
@@ -50,8 +51,9 @@ async function loadPlans() {
   }
 }
 loadPlans();
-const activePlans = computed(() => plans.value.filter((p) => p.status === "active"));
-const pastPlans = computed(() => plans.value.filter((p) => p.status !== "active"));
+const planQ = ref("");
+const activePlans = computed(() => fuzzyFilter(plans.value.filter((p) => p.status === "active"), planQ.value, (p) => [p.title, p.notes]));
+const pastPlans = computed(() => fuzzyFilter(plans.value.filter((p) => p.status !== "active"), planQ.value, (p) => [p.title, p.notes]));
 const showPastPlans = ref(false);
 
 const newPlan = ref(false);
@@ -91,10 +93,14 @@ async function closePlan(p: SessionPlan, status: "completed" | "cancelled" | "ac
 // count toward any plan yet — tick to credit them.
 const assigning = ref<string>();
 const candidates = ref<Session[]>([]);
+const assignQ = ref("");
+const shownCandidates = computed(() => fuzzyFilter(candidates.value, assignQ.value,
+  (s) => [s.title, dayOf(s.start), s.status]));
 const picked = reactive<Record<string, boolean>>({});
 async function openAssign(p: SessionPlan) {
   if (assigning.value === p.id) return (assigning.value = undefined);
   assigning.value = p.id;
+  assignQ.value = "";
   candidates.value = [];
   try {
     const q = new URLSearchParams({ trainee: id, from: p.startDate });
@@ -386,9 +392,11 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <Button size="sm" @click="createPlan">Create plan</Button>
         </Card>
         <Alert v-if="plansError">{{ plansError }}</Alert>
-        <p v-else-if="!activePlans.length && !newPlan" class="rounded-2xl border border-dashed border-line px-4 py-4 text-center text-sm text-muted">
+        <p v-else-if="!plans.some((p) => p.status === 'active') && !newPlan" class="rounded-2xl border border-dashed border-line px-4 py-4 text-center text-sm text-muted">
           No active plan. Create one to count sessions against an allowance, e.g. 12 private sessions.
         </p>
+        <SearchInput v-if="plans.length >= 6" v-model="planQ" label="Search session plans" placeholder="Search plan name or note…"
+          :matches="planQ ? activePlans.length + pastPlans.length : undefined" />
         <Card v-for="p in activePlans" :key="p.id" class="space-y-3 p-4">
           <PlanCard :plan="p" />
           <div class="flex flex-wrap gap-2">
@@ -400,7 +408,9 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
             <p v-if="!candidates.length" class="text-xs text-faint">No unassigned bookings of {{ trainee.name }} fall in this plan's dates.</p>
             <template v-else>
               <p class="text-xs text-faint">Their bookings not yet counted toward any plan:</p>
-              <label v-for="s in candidates" :key="s.id" class="flex min-h-10 items-center gap-3 rounded-lg px-1 text-sm">
+              <SearchInput v-if="candidates.length >= 8" v-model="assignQ" label="Search bookings to assign" placeholder="Search class or date…" :matches="assignQ ? shownCandidates.length : undefined" />
+              <p v-if="assignQ && !shownCandidates.length" class="text-xs text-faint">No bookings match that search.</p>
+              <label v-for="s in shownCandidates" :key="s.id" class="flex min-h-10 items-center gap-3 rounded-lg px-1 text-sm">
                 <input v-model="picked[s.id]" type="checkbox" class="h-5 w-5" />
                 <span class="min-w-0 flex-1 truncate">{{ formatDay(dayOf(s.start), { weekday: "short", month: "short", day: "numeric" }) }} · {{ formatTime(s.start) }} · {{ s.title }}</span>
                 <span class="shrink-0 text-xs text-faint">{{ s.status === "completed" ? attendanceLabel(myStatus(s)) : "upcoming" }}</span>
@@ -409,10 +419,10 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
             </template>
           </div>
         </Card>
-        <button v-if="pastPlans.length" class="min-h-10 px-1 text-xs text-faint hover:text-fg" @click="showPastPlans = !showPastPlans">
+        <button v-if="pastPlans.length && !planQ" class="min-h-10 px-1 text-xs text-faint hover:text-fg" @click="showPastPlans = !showPastPlans">
           {{ showPastPlans ? "Hide" : "Show" }} {{ pastPlans.length }} past plan{{ pastPlans.length === 1 ? "" : "s" }}
         </button>
-        <Card v-for="p in showPastPlans ? pastPlans : []" :key="p.id" class="space-y-2 p-4 opacity-80">
+        <Card v-for="p in showPastPlans || planQ ? pastPlans : []" :key="p.id" class="space-y-2 p-4 opacity-80">
           <PlanCard :plan="p" />
           <button class="min-h-10 px-1 text-xs text-faint hover:text-fg" @click="closePlan(p, 'active')">Reopen</button>
         </Card>
@@ -422,6 +432,9 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
       <section class="space-y-2">
         <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Dues</h2>
         <ChipGroup v-model="duesMonth" :options="monthChips" label="Dues month" scroll />
+        <label class="flex items-center gap-2 px-1 text-xs text-faint">Jump to any month
+          <input v-model="duesMonth" type="month" :class="inputCls + ' max-w-44'" aria-label="Dues month" />
+        </label>
         <Card class="p-4">
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">

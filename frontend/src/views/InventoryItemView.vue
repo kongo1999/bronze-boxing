@@ -7,7 +7,7 @@ import { useRoute, useRouter, RouterLink } from "vue-router";
 import { ChevronLeft, Pencil, Archive, ArchiveRestore, Trash2, PackagePlus, PackageMinus, ClipboardCheck } from "lucide-vue-next";
 import { api, errMsg, isApiError } from "@/lib/api";
 import { useCachedAsync, invalidate } from "@/lib/cache";
-import type { InventoryItem, Page, Sale, StockMovement, Trainee } from "@/lib/types";
+import type { InventoryItem, Sale, StockMovement, Trainee } from "@/lib/types";
 import { money, formatDateTime, formatLongDate } from "@/lib/format";
 import { backTarget, withBack } from "@/lib/route-state";
 import { shortage, MOVE_LABEL, DAMAGE_REASONS, COUNT_REASONS } from "@/lib/stock";
@@ -23,6 +23,9 @@ import AuditTrail from "@/components/ui/AuditTrail.vue";
 import SellSheet from "@/components/SellSheet.vue";
 import { btnClasses } from "@/components/ui/button";
 import { traineeOption } from "@/lib/options";
+import { useServerList } from "@/lib/server-list";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import Pagination from "@/components/ui/Pagination.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -36,28 +39,15 @@ const buyers = computed(() =>
   (trainees.value ?? []).filter((t) => t.status === "active" && !t.archivedAt).map(traineeOption),
 );
 
-const moves = ref<StockMovement[]>([]);
-async function loadMoves() {
-  try {
-    moves.value = await api.get<StockMovement[]>(`/inventory/${id}/movements?limit=100`);
-  } catch {
-    /* the history is secondary to the item itself */
-  }
-}
-loadMoves();
-
-const sales = ref<Sale[]>([]);
-const salesTotal = ref(0);
-async function loadSales(append = false) {
-  try {
-    const pg = await api.get<Page<Sale>>(`/sales?item=${id}&limit=10&offset=${append ? sales.value.length : 0}`);
-    sales.value = append ? [...sales.value, ...pg.items] : pg.items;
-    salesTotal.value = pg.total;
-  } catch {
-    /* secondary */
-  }
-}
-loadSales();
+const historyQ = ref("");
+const {
+  items: moves, total: movesTotal, page: movesPage, pageCount: movesPages,
+  from: movesFrom, to: movesTo, searching: movesSearching, reload: loadMoves,
+} = useServerList<StockMovement>((q) => `/inventory/${id}/movements${q ? `?q=${encodeURIComponent(q)}` : ""}`, historyQ, 10);
+const {
+  items: sales, total: salesTotal, page: salesPage, pageCount: salesPages,
+  from: salesFrom, to: salesTo, searching: salesSearching, reload: loadSales,
+} = useServerList<Sale>((q) => `/sales?item=${id}${q ? `&q=${encodeURIComponent(q)}` : ""}`, historyQ, 10);
 
 async function refresh() {
   invalidate("inventory", "sales", "financials");
@@ -143,7 +133,11 @@ async function sold(sale: Sale) {
 }
 
 // ── Archive / delete ────────────────────────────────────────────────────────
-const hasHistory = computed(() => sales.value.length > 0 || moves.value.some((m) => m.kind !== "opening"));
+const everHistory = ref(false);
+watch([salesTotal, moves], () => {
+  if (salesTotal.value > 0 || moves.value.some((m) => m.kind !== "opening")) everHistory.value = true;
+}, { immediate: true });
+const hasHistory = computed(() => everHistory.value);
 async function setArchived(archive: boolean) {
   if (!item.value) return;
   let reason = "";
@@ -288,8 +282,11 @@ const moveLink = (m: StockMovement) => (m.refType === "sale" && m.ref ? `/sales/
         </form>
       </Card>
 
+      <SearchInput v-model="historyQ" label="Search this item's history" placeholder="Search stock actions and sales…"
+        :searching="movesSearching || salesSearching" :matches="historyQ && !movesSearching && !salesSearching ? movesTotal + salesTotal : undefined" />
+
       <section class="space-y-2">
-        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Stock history</h2>
+        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Stock history · {{ movesTotal }}</h2>
         <ul class="divide-y divide-line/60 rounded-2xl border border-line bg-surface">
           <li v-for="m in moves" :key="m.id" class="flex items-center gap-3 px-3 py-2.5">
             <div class="min-w-0 flex-1">
@@ -305,8 +302,9 @@ const moveLink = (m: StockMovement) => (m.refType === "sale" && m.ref ? `/sales/
               <p class="text-xs text-faint">→ {{ m.stockAfter }}</p>
             </div>
           </li>
-          <li v-if="!moves.length" class="px-3 py-3 text-sm text-faint">No stock history yet.</li>
+          <li v-if="!moves.length" class="px-3 py-3 text-sm text-faint">{{ historyQ ? 'No stock actions match.' : 'No stock history yet.' }}</li>
         </ul>
+        <Pagination v-model="movesPage" :page-count="movesPages" :total="movesTotal" :from="movesFrom" :to="movesTo" label="stock actions" />
       </section>
 
       <section class="space-y-2">
@@ -326,8 +324,8 @@ const moveLink = (m: StockMovement) => (m.refType === "sale" && m.ref ? `/sales/
             </RouterLink>
           </li>
         </ul>
-        <p v-else class="px-1 text-sm text-faint">No sales yet.</p>
-        <button v-if="sales.length < salesTotal" class="min-h-10 px-1 text-sm font-medium text-bronze hover:underline" @click="loadSales(true)">Show more</button>
+        <p v-else class="px-1 text-sm text-faint">{{ historyQ ? 'No sales match.' : 'No sales yet.' }}</p>
+        <Pagination v-model="salesPage" :page-count="salesPages" :total="salesTotal" :from="salesFrom" :to="salesTo" label="sales" />
       </section>
 
       <Card class="space-y-3 p-4">

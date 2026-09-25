@@ -484,7 +484,7 @@ export interface MonthlyReport {
     partialPayers: ReportPayer[];
     unpaidPayers: ReportPayer[];
   };
-  trainees: { activeAtMonthEnd: number; joined: number; inactivated: number; attended: number };
+  trainees: { activeAtMonthEnd: number; unknownAtMonthEnd: number; joined: number; inactivated: number; attended: number };
   sessions: {
     total: number;
     scheduled: number;
@@ -498,6 +498,7 @@ export interface MonthlyReport {
     seriesCreated: number;
     series: { seriesId: string; title: string; completed: number; planned: number; inMonth: number }[];
     plansActive: number;
+    plansUnknown: number;
     planCredits: number;
     planRemaining: number;
   };
@@ -517,6 +518,7 @@ export interface MonthlyReport {
   inventory: {
     unitsSold: number;
     salesRevenue: number;
+    legacyLinkedSales: number;
     unitsReturned: number;
     refunds: number;
     topByUnits: { itemId: string; name: string; units: number; revenue: number }[];

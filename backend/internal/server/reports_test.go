@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"bronzeboxing/internal/models"
@@ -242,5 +243,112 @@ func TestMonthlyReportUsesStudioDaysAcrossDST(t *testing.T) {
 	e.ok("GET", "/reports/monthly?m=2025-10", nil, &rep)
 	if rep.Financial.TraineePayments != 23 || rep.Sessions.Total != 1 {
 		t.Fatalf("October 2025: payments %v (want 23), sessions %d (want 1)", rep.Financial.TraineePayments, rep.Sessions.Total)
+	}
+}
+
+func TestMonthlyReportDoesNotInventPreMigrationStatus(t *testing.T) {
+	e := newEnv(t)
+	month := models.ShiftMonth(models.MonthKey(nowFn()), -2)
+	id := primitive.NewObjectID()
+	joined := nowFn().AddDate(-1, 0, 0)
+	_, err := e.store.Coll(models.CollTrainees).InsertOne(e.ctx, models.Trainee{
+		ID: id, Name: "Legacy trainee", Status: models.StatusInactive, CreatedAt: joined,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.store.Coll(models.CollTerms).InsertOne(e.ctx, models.SubscriptionTerm{
+		ID: primitive.NewObjectID(), Trainee: id, EffectiveDate: models.DateKey(joined),
+		BillingFromMonth: models.MonthKey(nowFn()), Status: models.StatusInactive,
+		Source: "migrated", CreatedAt: nowFn(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep struct {
+		Trainees struct {
+			ActiveAtMonthEnd  int `json:"activeAtMonthEnd"`
+			UnknownAtMonthEnd int `json:"unknownAtMonthEnd"`
+		} `json:"trainees"`
+	}
+	e.ok("GET", "/reports/monthly?m="+month, nil, &rep)
+	if rep.Trainees.ActiveAtMonthEnd != 0 || rep.Trainees.UnknownAtMonthEnd != 1 {
+		t.Fatalf("legacy status was guessed: %+v", rep.Trainees)
+	}
+}
+
+func TestMonthlyReportUsesAuditedPlanStateAtMonthEnd(t *testing.T) {
+	e := newEnv(t)
+	month := models.ShiftMonth(models.MonthKey(nowFn()), -1)
+	from, _, _ := models.MonthRange(month)
+	owner := e.addTrainee("Plan owner", 0)
+	tid := oid(t, owner.ID)
+	created := from.Add(-time.Hour)
+	makePlan := func(title, end, status string, updated time.Time) models.SessionPlan {
+		p := models.SessionPlan{ID: primitive.NewObjectID(), Trainee: tid, Title: title,
+			TargetCount: 12, StartDate: models.DateKey(created), EndDate: end,
+			Status: status, CreatedAt: created, UpdatedAt: updated}
+		if _, err := e.store.Coll(models.CollPlans).InsertOne(e.ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// This plan was active last month, then closed this month.
+	closed := makePlan("Closed later", "", "completed", nowFn())
+	closed.TargetCount = 15
+	if _, err := e.store.Coll(models.CollPlans).UpdateOne(e.ctx, bson.M{"_id": closed.ID}, bson.M{"$set": bson.M{"targetCount": 15}}); err != nil {
+		t.Fatal(err)
+	}
+	activeThen := closed
+	activeThen.Status, activeThen.TargetCount, activeThen.UpdatedAt = "active", 12, created
+	for _, event := range []models.AuditEntry{
+		{Entity: "plan", Ref: closed.ID, Action: "create", After: activeThen, At: created},
+		{Entity: "plan", Ref: closed.ID, Action: "update", After: closed, At: nowFn()},
+	} {
+		if _, err := e.store.Coll(models.CollAudit).InsertOne(e.ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An otherwise active plan expired on the 10th, before month end.
+	makePlan("Expired early", month+"-10", "active", created)
+	var rep struct {
+		Sessions struct {
+			PlansActive   int `json:"plansActive"`
+			PlansUnknown  int `json:"plansUnknown"`
+			PlanRemaining int `json:"planRemaining"`
+		} `json:"sessions"`
+	}
+	e.ok("GET", "/reports/monthly?m="+month, nil, &rep)
+	if rep.Sessions.PlansActive != 1 || rep.Sessions.PlansUnknown != 0 || rep.Sessions.PlanRemaining != 12 {
+		t.Fatalf("plan month-end state = %+v", rep.Sessions)
+	}
+}
+
+func TestMonthlyReportCountsLegacyLinkedSaleInShop(t *testing.T) {
+	e := newEnv(t)
+	month := models.MonthKey(nowFn())
+	item := e.addItem("Legacy gloves", 5, 10, 6)
+	pid := primitive.NewObjectID()
+	_, err := e.store.Coll(models.CollSales).InsertOne(e.ctx, models.Sale{
+		ID: primitive.NewObjectID(), Item: oid(t, item.ID), ItemName: "Legacy gloves",
+		Qty: 2, UnitPrice: 10, Total: 20, PaymentID: &pid, Date: nowFn(), CreatedAt: nowFn(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep struct {
+		Financial struct {
+			ShopSales float64 `json:"shopSales"`
+		} `json:"financial"`
+		Inventory struct {
+			UnitsSold         int     `json:"unitsSold"`
+			SalesRevenue      float64 `json:"salesRevenue"`
+			LegacyLinkedSales int     `json:"legacyLinkedSales"`
+		} `json:"inventory"`
+	}
+	e.ok("GET", "/reports/monthly?m="+month, nil, &rep)
+	if rep.Financial.ShopSales != 0 || rep.Inventory.UnitsSold != 2 ||
+		rep.Inventory.SalesRevenue != 20 || rep.Inventory.LegacyLinkedSales != 1 {
+		t.Fatalf("linked sale = %+v", rep)
 	}
 }
