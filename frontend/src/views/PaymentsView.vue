@@ -28,6 +28,7 @@ import Pagination from "@/components/ui/Pagination.vue";
 import ChipGroup, { type Chip } from "@/components/ui/ChipGroup.vue";
 import { btnClasses } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import PaymentPromises from "@/components/PaymentPromises.vue";
 
 const route = useRoute();
 const patchQuery = usePatchQuery();
@@ -220,6 +221,7 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
     </PageHeader>
 
     <MonthPicker v-model="month" />
+    <PaymentPromises :month="month" :dues="subs" />
 
     <div v-if="loading" class="space-y-3">
       <Skeleton variant="stats" />

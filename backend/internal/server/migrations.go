@@ -25,7 +25,28 @@ func Migrations() []migrate.Migration {
 		{ID: "2026-09-004-reminder-due-day", Description: "Store each reminder's studio-local due day", Up: migrateReminderDueDay},
 		{ID: "2026-09-005-closings-returns-indexes", Description: "Indexes for daily cash counts and sale returns", Up: migrateClosingsReturnsIndexes},
 		{ID: "2026-09-006-series-and-plans", Description: "Series records for existing recurring sessions; indexes for series and session plans", Up: migrateSeriesAndPlans},
+		{ID: "2026-10-007-coach-workflows", Description: "Indexes for payment promises, waitlists, progress notes, trial leads and month reviews", Up: migrateCoachWorkflows},
 	}
+}
+
+func migrateCoachWorkflows(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {
+	res := migrate.Result{}
+	for coll, specs := range map[string][]mongo.IndexModel{
+		models.CollPromises:      {idx(bson.D{{Key: "trainee", Value: 1}, {Key: "periodMonth", Value: 1}, {Key: "createdAt", Value: -1}}, false), idx(bson.D{{Key: "dueDay", Value: 1}}, false)},
+		models.CollWaitlist:      {idx(bson.D{{Key: "session", Value: 1}, {Key: "trainee", Value: 1}}, true), idx(bson.D{{Key: "session", Value: 1}, {Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, false)},
+		models.CollProgress:      {idx(bson.D{{Key: "trainee", Value: 1}, {Key: "createdAt", Value: -1}}, false)},
+		models.CollLeads:         {idx(bson.D{{Key: "status", Value: 1}, {Key: "followUpDay", Value: 1}}, false)},
+		models.CollReviews:       {idx(bson.D{{Key: "month", Value: 1}}, true)},
+		models.CollPayments:      {idx(bson.D{{Key: "sessionId", Value: 1}, {Key: "trainee", Value: 1}}, false)},
+		models.CollCancellations: {idx(bson.D{{Key: "session", Value: 1}, {Key: "at", Value: -1}}, false)},
+	} {
+		n, err := r.EnsureIndexes(ctx, coll, specs)
+		if err != nil {
+			return res, err
+		}
+		res.Add("indexes", n)
+	}
+	return res, nil
 }
 
 func idx(keys bson.D, unique bool) mongo.IndexModel {

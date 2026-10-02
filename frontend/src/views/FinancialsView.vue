@@ -186,7 +186,8 @@ function afterChange() {
 }
 
 // ── Expenses: add, and edit / void inline from the ledger ────────────────
-const showAdd = ref(false);
+const showAdd = ref(route.query.act === "expense");
+watch(() => route.query.act, (act) => { if (act === "expense") showAdd.value = true; });
 const busy = ref(false);
 const form = reactive({ amount: 0, category: "rent", note: "", day: todayKey() });
 // Adding while viewing an old month defaults the date into that month (the

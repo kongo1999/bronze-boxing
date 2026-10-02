@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { demoResolve } from "../demo";
 import { isApiError } from "../api-error";
 import { addDays, currentMonth, mondayOf, shiftMonthKey, todayKey } from "../studio";
-import type { Financials, MonthlyReport, Page, Payment, SearchResponse, SeriesDetail, SessionPlan, SubStatus } from "../types";
+import type { Financials, MonthlyReport, Page, Payment, SearchResponse, SeriesDetail, SessionPlan, SubStatus, PaymentPromise, TrialLead, FollowUp, ProgressNote, MonthReview } from "../types";
 
 // The demo answers with the live API's shapes and rules, so a preview can't
 // teach anyone something the real app won't do.
@@ -77,5 +77,26 @@ describe("demo contract", () => {
     expect(rep.financial.net).toBe(fin.net);
     expect(rep.subscriptions.partial + rep.subscriptions.paid + rep.subscriptions.unpaid).toBe(rep.subscriptions.billed);
     expect(code(() => get(`/reports/monthly?m=${shiftMonthKey(month, 1)}`))).toBe("VALIDATION");
+  });
+
+  it("tracks a promised balance and keeps trial follow-ups actionable", () => {
+    const t = post<{ id: string }>("/trainees", { name: "Promise demo", monthlyFee: 100 });
+    const p = post<PaymentPromise>("/payment-promises", { trainee: t.id, periodMonth: month, amount: 100, dueDay: addDays(todayKey(), 1) });
+    expect(get<PaymentPromise[]>(`/payment-promises?m=${month}`).find((x) => x.id === p.id)?.state).toBe("open");
+    post("/payments", { trainee: t.id, type: "subscription", periodMonth: month, amount: 40 });
+    expect(get<PaymentPromise[]>(`/payment-promises?m=${month}`).find((x) => x.id === p.id)?.outstanding).toBe(60);
+    const lead = post<TrialLead>("/trial-leads", { name: "Demo visitor", followUpDay: todayKey() });
+    const item = get<FollowUp[]>("/follow-ups").find((x) => x.key === `trial:${lead.id}`);
+    expect(item).toBeTruthy();
+    post("/follow-ups/action", { key: item!.key, action: "snooze", days: 7 });
+    expect(get<FollowUp[]>("/follow-ups").some((x) => x.key === item!.key)).toBe(false);
+    expect(get<FollowUp[]>("/follow-ups?show=snoozed").some((x) => x.key === item!.key)).toBe(true);
+  });
+
+  it("saves boxing notes and month review metadata", () => {
+    post<ProgressNote>("/trainees/t3/progress", { goal: "Better guard", nextFocus: "Slip" });
+    expect(get<ProgressNote[]>("/trainees/t3/progress")[0].nextFocus).toBe("Slip");
+    post("/month-review", { month, note: "Checked" });
+    expect(get<MonthReview>(`/month-review?m=${month}`).review?.note).toBe("Checked");
   });
 });

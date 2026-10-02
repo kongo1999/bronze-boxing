@@ -79,23 +79,31 @@ const (
 
 // Collection names.
 const (
-	CollTrainees     = "trainees"
-	CollSessions     = "sessions"
-	CollPayments     = "payments"
-	CollReminders    = "reminders"
-	CollExpenses     = "expenses"
-	CollInventory    = "inventory"
-	CollSales        = "sales"
-	CollUsers        = "users"
-	CollAuthSessions = "auth_sessions" // login sessions, not training sessions
-	CollAudit        = "audit_log"     // append-only money audit trail
-	CollMovements    = "stock_movements"
-	CollTerms        = "subscription_terms"
-	CollCharges      = "subscription_charges"
-	CollClosings     = "cash_closings"
-	CollReturns      = "sale_returns"
-	CollSeries       = "session_series"
-	CollPlans        = "trainee_session_plans"
+	CollTrainees      = "trainees"
+	CollSessions      = "sessions"
+	CollPayments      = "payments"
+	CollReminders     = "reminders"
+	CollExpenses      = "expenses"
+	CollInventory     = "inventory"
+	CollSales         = "sales"
+	CollUsers         = "users"
+	CollAuthSessions  = "auth_sessions" // login sessions, not training sessions
+	CollAudit         = "audit_log"     // append-only money audit trail
+	CollMovements     = "stock_movements"
+	CollTerms         = "subscription_terms"
+	CollCharges       = "subscription_charges"
+	CollClosings      = "cash_closings"
+	CollReturns       = "sale_returns"
+	CollSeries        = "session_series"
+	CollPlans         = "trainee_session_plans"
+	CollPromises      = "payment_promises"
+	CollWaitlist      = "session_waitlist"
+	CollProgress      = "trainee_progress_notes"
+	CollLeads         = "trial_leads"
+	CollReviews       = "month_reviews"
+	CollPolicy        = "studio_policy"
+	CollCancellations = "session_cancellations"
+	CollFollowUps     = "followup_actions"
 )
 
 // User is a staff login account. The admin account is bootstrapped from
@@ -151,19 +159,21 @@ type Attendee struct {
 }
 
 type Session struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Title       string             `bson:"title" json:"title"`
-	Type        string             `bson:"type" json:"type"`
-	Start       time.Time          `bson:"start" json:"start"`
-	DurationMin int                `bson:"durationMin" json:"durationMin"`
-	Location    string             `bson:"location,omitempty" json:"location,omitempty"`
-	Capacity    int                `bson:"capacity,omitempty" json:"capacity,omitempty"`
-	Fee         float64            `bson:"fee,omitempty" json:"fee,omitempty"`
-	SeriesID    string             `bson:"seriesId,omitempty" json:"seriesId,omitempty"`
-	Status      string             `bson:"status" json:"status"`
-	Attendees   []Attendee         `bson:"attendees" json:"attendees"`
-	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
-	UpdatedAt   time.Time          `bson:"updatedAt" json:"updatedAt"`
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Title        string             `bson:"title" json:"title"`
+	Type         string             `bson:"type" json:"type"`
+	Start        time.Time          `bson:"start" json:"start"`
+	DurationMin  int                `bson:"durationMin" json:"durationMin"`
+	Location     string             `bson:"location,omitempty" json:"location,omitempty"`
+	Capacity     int                `bson:"capacity,omitempty" json:"capacity,omitempty"`
+	Fee          float64            `bson:"fee,omitempty" json:"fee,omitempty"`
+	SeriesID     string             `bson:"seriesId,omitempty" json:"seriesId,omitempty"`
+	Status       string             `bson:"status" json:"status"`
+	Attendees    []Attendee         `bson:"attendees" json:"attendees"`
+	CloseoutNote string             `bson:"closeoutNote,omitempty" json:"closeoutNote,omitempty"`
+	ClosedAt     *time.Time         `bson:"closedAt,omitempty" json:"closedAt,omitempty"`
+	CreatedAt    time.Time          `bson:"createdAt" json:"createdAt"`
+	UpdatedAt    time.Time          `bson:"updatedAt" json:"updatedAt"`
 }
 
 type Payment struct {
@@ -178,6 +188,7 @@ type Payment struct {
 	Method      string              `bson:"method,omitempty" json:"method,omitempty"`       // cash | card | bank_transfer | other
 	Reference   string              `bson:"reference,omitempty" json:"reference,omitempty"` // card slip / transfer ref
 	SaleID      *primitive.ObjectID `bson:"saleId,omitempty" json:"saleId,omitempty"`
+	SessionID   *primitive.ObjectID `bson:"sessionId,omitempty" json:"sessionId,omitempty"`
 	CreatedAt   time.Time           `bson:"createdAt" json:"createdAt"`
 	CreatedBy   string              `bson:"createdBy,omitempty" json:"createdBy,omitempty"`
 	VoidedAt    *time.Time          `bson:"voidedAt,omitempty" json:"voidedAt,omitempty"`
@@ -425,4 +436,89 @@ type SessionPlan struct {
 	Notes       string             `bson:"notes,omitempty" json:"notes,omitempty"`
 	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
 	UpdatedAt   time.Time          `bson:"updatedAt" json:"updatedAt"`
+}
+
+// Promise records a specific agreed instalment. Status is derived from the
+// current charge balance and payments received after it was made; the stored
+// record is the agreement, never income.
+type PaymentPromise struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Trainee     primitive.ObjectID `bson:"trainee" json:"trainee"`
+	TraineeName string             `bson:"traineeName" json:"traineeName"`
+	PeriodMonth string             `bson:"periodMonth" json:"periodMonth"`
+	Amount      float64            `bson:"amount" json:"amount"`
+	DueDay      string             `bson:"dueDay" json:"dueDay"`
+	Note        string             `bson:"note,omitempty" json:"note,omitempty"`
+	CancelledAt *time.Time         `bson:"cancelledAt,omitempty" json:"cancelledAt,omitempty"`
+	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
+	CreatedBy   string             `bson:"createdBy" json:"createdBy"`
+}
+
+type WaitlistEntry struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Session     primitive.ObjectID `bson:"session" json:"session"`
+	Trainee     primitive.ObjectID `bson:"trainee" json:"trainee"`
+	TraineeName string             `bson:"traineeName" json:"traineeName"`
+	Status      string             `bson:"status" json:"status"` // waiting | offered | booked | declined | cancelled
+	OfferedAt   *time.Time         `bson:"offeredAt,omitempty" json:"offeredAt,omitempty"`
+	CreatedAt   time.Time          `bson:"createdAt" json:"createdAt"`
+	UpdatedAt   time.Time          `bson:"updatedAt" json:"updatedAt"`
+}
+
+type ProgressNote struct {
+	ID        primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	Trainee   primitive.ObjectID  `bson:"trainee" json:"trainee"`
+	Session   *primitive.ObjectID `bson:"session,omitempty" json:"session,omitempty"`
+	Goal      string              `bson:"goal,omitempty" json:"goal,omitempty"`
+	Skills    string              `bson:"skills,omitempty" json:"skills,omitempty"`
+	NextFocus string              `bson:"nextFocus,omitempty" json:"nextFocus,omitempty"`
+	Note      string              `bson:"note,omitempty" json:"note,omitempty"`
+	CreatedAt time.Time           `bson:"createdAt" json:"createdAt"`
+	CreatedBy string              `bson:"createdBy" json:"createdBy"`
+}
+
+type TrialLead struct {
+	ID              primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	Name            string              `bson:"name" json:"name"`
+	Phone           string              `bson:"phone,omitempty" json:"phone,omitempty"`
+	Source          string              `bson:"source,omitempty" json:"source,omitempty"`
+	Status          string              `bson:"status" json:"status"` // enquiry | booked | attended | missed | converted | lost
+	TrialDay        string              `bson:"trialDay,omitempty" json:"trialDay,omitempty"`
+	TrialAttendedAt *time.Time          `bson:"trialAttendedAt,omitempty" json:"trialAttendedAt,omitempty"`
+	FollowUpDay     string              `bson:"followUpDay,omitempty" json:"followUpDay,omitempty"`
+	Notes           string              `bson:"notes,omitempty" json:"notes,omitempty"`
+	Trainee         *primitive.ObjectID `bson:"trainee,omitempty" json:"trainee,omitempty"`
+	CreatedAt       time.Time           `bson:"createdAt" json:"createdAt"`
+	UpdatedAt       time.Time           `bson:"updatedAt" json:"updatedAt"`
+}
+
+type MonthReview struct {
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Month      string             `bson:"month" json:"month"`
+	ReviewedAt time.Time          `bson:"reviewedAt" json:"reviewedAt"`
+	ReviewedBy string             `bson:"reviewedBy" json:"reviewedBy"`
+	Note       string             `bson:"note,omitempty" json:"note,omitempty"`
+}
+
+type StudioPolicy struct {
+	ID                     string `bson:"_id" json:"id"`
+	CancelBeforeHours      int    `bson:"cancelBeforeHours" json:"cancelBeforeHours"`
+	LateCancellationAction string `bson:"lateCancellationAction" json:"lateCancellationAction"` // allow | no_show
+}
+
+type SessionCancellation struct {
+	ID      primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Session primitive.ObjectID `bson:"session" json:"session"`
+	Trainee primitive.ObjectID `bson:"trainee" json:"trainee"`
+	Late    bool               `bson:"late" json:"late"`
+	Outcome string             `bson:"outcome" json:"outcome"` // released | no_show
+	Reason  string             `bson:"reason,omitempty" json:"reason,omitempty"`
+	At      time.Time          `bson:"at" json:"at"`
+}
+
+type FollowUpAction struct {
+	ID              string     `bson:"_id" json:"id"`
+	SnoozedUntil    string     `bson:"snoozedUntil,omitempty" json:"snoozedUntil,omitempty"`
+	LastContactedAt *time.Time `bson:"lastContactedAt,omitempty" json:"lastContactedAt,omitempty"`
+	UpdatedBy       string     `bson:"updatedBy" json:"updatedBy"`
 }

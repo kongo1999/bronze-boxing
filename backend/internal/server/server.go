@@ -57,6 +57,7 @@ func New(cfg config.Config, store *db.Store) *fiber.App {
 	registerLedger(api, store)
 	registerPlans(api, store)
 	registerReports(api, store)
+	registerCoachWorkflows(api, store)
 
 	return app
 }

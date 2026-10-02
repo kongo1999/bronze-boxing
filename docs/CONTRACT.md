@@ -151,6 +151,27 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (verified active at the report cutoff, `unknownAtMonthEnd` for legacy months before membership history began, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned and an `occurrenceId` to open the series, plans active from their audited state / `plansUnknown` when past state is unavailable / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold and revenue including sales linked to legacy payments, `legacyLinkedSales` count, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. Cash for a linked legacy sale remains counted once as its payment. |
 | GET | `/reports/monthly/export?m=` | The same report as CSV (Section, Metric, Value) |
 
+### Coach workflows (October 2026)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET/POST | `/payment-promises?m=&trainee=` | One agreed subscription instalment `{trainee,periodMonth,amount,dueDay,note?}`. Read adds `paidSince`, `outstanding`, and `state` (`open`, `due`, `overdue`, `fulfilled`, `resolved`, `cancelled`). An agreement is never income. Later live payments toward the same period fulfill it; a waived or fully settled charge resolves it. |
+| POST | `/payment-promises/:id/cancel` | Cancels the promise without changing the charge or payments. |
+| GET/POST | `/trainees/:id/progress` | Append-only coaching notes `{goal?,skills?,nextFocus?,note?,session?}`; newest first. |
+| GET/POST | `/trial-leads` | Enquiries and trials. POST `{name,phone?,source?,trialDay?,followUpDay?,notes?}`. |
+| PATCH | `/trial-leads/:id` | Update details and status; first `attended` status records `trialAttendedAt` so attendance remains visible after conversion. `converted` requires a linked existing `trainee` id. |
+| GET | `/follow-ups?show=snoozed` | Derived queue from outstanding current/previous dues, due promises, trial reminders, plans near exhaustion, and active trainees with no attendance for 21 days. Default hides snoozed items. |
+| POST | `/follow-ups/action` | `{key,action:"contacted"\|"snooze"\|"clear",days?}`. Contacted and snooze hide for seven days by default. |
+| GET/POST | `/month-review?m=` | GET checks unclosed classes, unmarked attendance, unresolved dues, counted cash differences, and current low stock; includes any saved review. POST `{month,note?}` timestamps an acknowledgement without changing the financial report. |
+| GET/PUT | `/studio-policy` | `{cancelBeforeHours,lateCancellationAction:"allow"\|"no_show"}`. Before class start, a cancellation releases the place; after start, the optional late no-show rule can record a no-show. No-show never credits a session plan. |
+| GET/POST | `/sessions/:id/waitlist` | Ordered list; POST `{trainee}` only when an upcoming class is full. |
+| POST | `/sessions/:id/cancel-booking` | `{trainee,reason?}` records the cancellation, removes a booked place or records a late no-show, and offers a released place to the next waiter. |
+| POST | `/sessions/:id/waitlist/:entry/accept` | Accepts an offered place while capacity is still available; books the trainee atomically. |
+| POST | `/sessions/:id/waitlist/:entry/decline` | Declines/removes an entry; offers the next waiter if an offer was declined. |
+| POST | `/sessions/:id/closeout` | `{attendance:[{trainee,status:"attended"\|"no_show"}],note?}` requires every booked trainee and a started class; saves all statuses, note, and completed state in one transaction. |
+
+Class payments may include `sessionId` when type is `dropin` or `private`, and `/payments?sessionId=` lists them. A linked payment must name a trainee booked in that class; changing its trainee or type to a non-class payment is refused. Voids stop it counting in closeout.
+
 Shop refunds are attributed to the payment method of the sale they refund
 (a card sale's refund is card, not cash), in the ledger, the method split
 and the cash closing.
@@ -207,6 +228,8 @@ page they were opened from (`?back=`).
 | `sale_returns` | Partial returns of sales (Phase 5 endpoint); counted in the cash month of the return while the sale is live |
 | `session_series` | A recurring series: pattern, `plannedCount`, `inferred` for series found in old data |
 | `trainee_session_plans` | A trainee's package of N sessions; progress is computed from linked attendance, never stored |
+| `payment_promises`, `session_waitlist`, `trainee_progress_notes`, `trial_leads` | Coach workflows; all new records, no legacy data rewrite |
+| `month_reviews`, `studio_policy`, `session_cancellations`, `followup_actions` | Month acknowledgement, studio cancellation rule, cancellation history, and follow-up snoozes |
 
 ## Phase 0–1 migration impact
 
@@ -219,6 +242,7 @@ Run `migrate -dry-run` first; see DEPLOY.md.
 
 5. `2026-09-005-closings-returns-indexes` — unique `day` on cash closings, indexes on sale returns.
 6. `2026-09-006-series-and-plans` — indexes for series/plans/attendee plan links; each distinct `seriesId` already on sessions gets a `session_series` document with `inferred: true` and `plannedCount` = its non-cancelled occurrences (no sessions are changed).
+7. `2026-10-007-coach-workflows` — indexes for promises, waitlists, progress notes, trials, reviews, linked class payments and cancellation history; no existing records are rewritten. Run it before starting the new API.
 
 Plan and series counting: a plan's `completed` counts linked bookings where the
 class is completed **and** the trainee attended. A completed class where the

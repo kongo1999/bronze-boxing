@@ -22,6 +22,8 @@ import Alert from "@/components/ui/Alert.vue";
 import Button from "@/components/ui/Button.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import PlanCard from "@/components/PlanCard.vue";
+import TraineeProgress from "@/components/TraineeProgress.vue";
+import TraineePromises from "@/components/TraineePromises.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { fuzzyFilter } from "@/lib/fuzzy";
@@ -372,6 +374,9 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <button class="inline-flex min-h-10 items-center gap-1 px-2 text-xs text-faint hover:text-overdue" :disabled="busy" @click="remove"><Trash2 class="h-3.5 w-3.5" /> Delete</button>
         </div>
       </Card>
+
+      <TraineeProgress :trainee="id" />
+      <TraineePromises :trainee="id" />
 
       <!-- Session plans: the trainee's own attended / target counters. -->
       <section class="space-y-2">

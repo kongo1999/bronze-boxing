@@ -17,6 +17,10 @@ import {
   X,
   CalendarPlus,
   Banknote,
+  ReceiptText,
+  ShoppingBag,
+  MessageCircle,
+  ContactRound,
   UserPlus,
   BellPlus,
   Menu,
@@ -66,6 +70,8 @@ const railItems = computed<NavItem[]>(() => [
   },
   { to: "/financials", label: "Financials", icon: LineChart },
   { to: "/inventory", label: "Inventory", icon: Package },
+  { to: "/follow-ups", label: "Follow-ups", icon: MessageCircle },
+  { to: "/trial-leads", label: "Trials", icon: ContactRound },
 ]);
 
 // Keep the overdue count current as the coach moves around (throttled).
@@ -81,6 +87,8 @@ const addActions: NavItem[] = [
   { to: "/payments/new", label: "Log payment", icon: Banknote },
   { to: "/trainees/new", label: "Add trainee", icon: UserPlus },
   { to: "/reminders/new", label: "New reminder", icon: BellPlus },
+  { to: "/financials?act=expense", label: "Record expense", icon: ReceiptText },
+  { to: "/inventory?act=sell", label: "Sell item", icon: ShoppingBag },
 ];
 
 const isActive = (to: string) =>
