@@ -22,6 +22,7 @@ import Badge from "@/components/ui/Badge.vue";
 import { btnClasses } from "@/components/ui/button";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import { fuzzyFilter } from "@/lib/fuzzy";
+import MonthReview from "@/components/MonthReview.vue";
 
 const route = useRoute();
 const here = computed(() => route.fullPath);
@@ -135,6 +136,7 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
     </PageHeader>
 
     <div data-print-hide><MonthPicker v-model="month" /></div>
+    <MonthReview :month="month" />
     <h2 class="hidden font-display text-xl font-semibold print:block">{{ monthLabel(month) }}</h2>
 
     <Skeleton v-if="loading" :rows="6" />

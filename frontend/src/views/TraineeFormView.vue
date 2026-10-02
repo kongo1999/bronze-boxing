@@ -10,6 +10,7 @@ import Card from "@/components/ui/Card.vue";
 import Button from "@/components/ui/Button.vue";
 import Alert from "@/components/ui/Alert.vue";
 import { inputCls } from "@/lib/ui";
+import { toast } from "@/lib/toast";
 
 const route = useRoute();
 const router = useRouter();
@@ -17,8 +18,8 @@ const id = route.params.id as string | undefined;
 const editing = !!id;
 
 const form = reactive({
-  name: "",
-  phone: "",
+  name: !editing && typeof route.query.name === "string" ? route.query.name : "",
+  phone: !editing && typeof route.query.phone === "string" ? route.query.phone : "",
   skillLevel: "",
   monthlyFee: 0,
   status: "active",
@@ -93,6 +94,10 @@ async function submit(confirmSameDay = false) {
       ? await api.put<Trainee>(`/trainees/${id}`, body)
       : await api.post<Trainee>(`/trainees`, form);
     invalidate("trainees", "dues", "dashboard");
+    if (!editing && typeof route.query.lead === "string") {
+      try { await api.patch(`/trial-leads/${route.query.lead}`, { status: "converted", trainee: saved.id }); }
+      catch (e) { toast(`Trainee saved, but trial wasn't linked: ${errMsg(e)}`, "error"); }
+    }
     router.push(`/trainees/${saved.id}`);
   } catch (e) {
     saving.value = false;

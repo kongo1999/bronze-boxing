@@ -428,6 +428,29 @@ func (h *sessionHandler) update(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
+		remaining := make(map[primitive.ObjectID]bool, len(attendees))
+		for _, a := range attendees {
+			remaining[a.Trainee] = true
+		}
+		for _, a := range cur.Attendees {
+			if remaining[a.Trainee] {
+				continue
+			}
+			n, err := linkedClassPayments(ctx, h.store, id, &a.Trainee)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				return apiErr(http.StatusConflict, CodeConflict, "this booking has a linked payment; void or correct that payment before removing the trainee")
+			}
+			n, err = h.store.Coll(models.CollProgress).CountDocuments(ctx, bson.M{"session": id, "trainee": a.Trainee})
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				return apiErr(http.StatusConflict, CodeConflict, "this booking has a linked progress note; keep the trainee in the class history")
+			}
+		}
 		if err := h.linkPlans(ctx, &id, attendees, cur.Attendees, []occurrence{{next.Start, next.Type}}, in.PlanOverride); err != nil {
 			return err
 		}
@@ -499,6 +522,27 @@ func (h *sessionHandler) remove(c *fiber.Ctx) error {
 	id, err := objID(c)
 	if err != nil {
 		return err
+	}
+	if _, err := findSession(ctx, h.store, id); err != nil {
+		return err
+	}
+	n, err := linkedClassPayments(ctx, h.store, id, nil)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return apiErr(http.StatusConflict, CodeConflict,
+			"this class has linked payments; void or correct those payments before deleting it")
+	}
+	for _, collection := range []string{models.CollWaitlist, models.CollCancellations, models.CollProgress} {
+		n, err := h.store.Coll(collection).CountDocuments(ctx, bson.M{"session": id})
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return apiErr(http.StatusConflict, CodeConflict,
+				"this class has waitlist, cancellation or progress history; cancel it instead of deleting it")
+		}
 	}
 	res, err := h.store.Coll(models.CollSessions).DeleteOne(ctx, bson.M{
 		"_id":              id,

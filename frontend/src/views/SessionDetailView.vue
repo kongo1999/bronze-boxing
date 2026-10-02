@@ -25,6 +25,7 @@ import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
 import { traineeOption } from "@/lib/options";
+import SessionCoachTools from "@/components/SessionCoachTools.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -70,6 +71,12 @@ const here = computed(() => route.fullPath);
 const dateLabel = (iso: string) => formatDay(dayOf(iso), { weekday: "long", month: "long", day: "numeric" });
 function changed() {
   invalidate("sessions", "dashboard", "trainees");
+}
+function coachSaved(s: Session) {
+  session.value = s;
+  changed();
+  loadPlans(s);
+  if (s.seriesId) loadSeries(s.seriesId);
 }
 
 // ── Attendance ────────────────────────────────────────────────────────────
@@ -355,6 +362,8 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
           </button>
         </div>
       </Card>
+
+      <SessionCoachTools :session="session" @saved="coachSaved" />
 
       <!-- Attendance needed: a completed class with people still "booked". -->
       <Card v-if="needsAttendance" class="border-partial/40 p-4">

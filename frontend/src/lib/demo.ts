@@ -16,7 +16,7 @@ import { addDays, currentMonth, dayOf as studioDay, monthOf, shiftMonthKey, stud
 import type {
   Trainee, Session, Payment, Reminder, Expense, InventoryItem, Sale, SaleReturn, StockMovement,
   SubStatus, Dashboard, Financials, SearchResponse, SearchHit, SearchKind, Attendee, AuditEntry, LedgerRow,
-  SessionPlan, PlanProgress, SeriesProgress, MonthlyReport, Charge,
+  SessionPlan, PlanProgress, SeriesProgress, MonthlyReport, Charge, PaymentPromise, WaitlistEntry, ProgressNote, TrialLead, StudioPolicy, FollowUp, MonthReview,
 } from "./types";
 
 // Demo on in production unless explicitly disabled; off in dev unless forced.
@@ -126,6 +126,20 @@ const sessions: Session[] = [];
     ], createdAt: nowISO, updatedAt: nowISO,
   });
 })();
+
+// Coach workflows use the same in-session mutable data as the rest of the
+// demo. A reload intentionally resets them with the demo banner's warning.
+const promises: PaymentPromise[] = [];
+const waitEntries: WaitlistEntry[] = [];
+const progressNotes: ProgressNote[] = [
+  { id: "pn1", trainee: "t3", goal: "Amateur bout preparation", skills: "Footwork and guard", nextFocus: "Counter after the jab", createdAt: nowISO, createdBy: "demo" },
+];
+const leads: TrialLead[] = [
+  { id: "lead1", name: "Nadine Saad", phone: "03 454 545", source: "Referral", status: "enquiry", followUpDay: TODAY, createdAt: nowISO, updatedAt: nowISO },
+];
+const monthReviews: Record<string, MonthReview["review"]> = {};
+const followUpSnoozes: Record<string, string> = {};
+const studioPolicy: StudioPolicy = { id: "default", cancelBeforeHours: 12, lateCancellationAction: "allow" };
 
 // ── Money ──────────────────────────────────────────────────────────────────
 const payments: Payment[] = [
@@ -465,6 +479,98 @@ function searched<T>(rows: T[], q: string | null, fields: (x: T) => (string | un
   return q && q.trim() ? rank(rows, q, fields).map((x) => x.item) : rows;
 }
 
+function coachDemo(path: string, method: string, body: Record<string, any>, params: URLSearchParams, seg: string[]): { handled: boolean; value?: unknown } {
+  const yes = (value: unknown) => ({ handled: true, value });
+  const promiseState = (p: PaymentPromise): PaymentPromise => {
+    const paidSince = payments.filter((x) => !x.voidedAt && x.type === "subscription" && x.trainee === p.trainee && x.periodMonth === p.periodMonth && x.createdAt >= p.createdAt).reduce((n, x) => n + x.amount, 0);
+    const outstanding = p.cancelledAt ? 0 : Math.max(0, amt(cents(p.amount) - cents(paidSince)));
+    const due = subscriptions(p.periodMonth).find((x) => x.trainee.id === p.trainee);
+    const resolved = due && due.remaining <= 0 && outstanding > 0;
+    return { ...p, paidSince, outstanding: resolved ? 0 : outstanding, state: p.cancelledAt ? "cancelled" : !outstanding ? "fulfilled" : resolved ? "resolved" : p.dueDay < TODAY ? "overdue" : p.dueDay === TODAY ? "due" : "open" };
+  };
+  if (path === "/studio-policy") {
+    if (method === "PUT") {
+      if (!(body.cancelBeforeHours >= 0 && body.cancelBeforeHours <= 168)) fail(400, "VALIDATION", "choose 0 to 168 hours", "cancelBeforeHours");
+      if (!["allow", "no_show"].includes(body.lateCancellationAction)) fail(400, "VALIDATION", "invalid late cancellation action", "lateCancellationAction");
+      Object.assign(studioPolicy, body);
+    }
+    return yes(studioPolicy);
+  }
+  if (seg[0] === "payment-promises") {
+    if (seg[2] === "cancel") { const p = promises.find((x) => x.id === seg[1]); if (!p) fail(404, "NOT_FOUND", "promise not found"); p.cancelledAt = new Date().toISOString(); return yes({ ok: true }); }
+    if (method === "POST") {
+      const due = subscriptions(body.periodMonth ?? MONTH).find((x) => x.trainee.id === body.trainee);
+      if (!due || !(body.amount > 0) || cents(body.amount) > cents(due.remaining)) fail(400, "VALIDATION", "amount must fit the balance", "amount");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.dueDay) || body.dueDay < TODAY) fail(400, "VALIDATION", "choose a future due day", "dueDay");
+      if (promises.some((p) => p.trainee === body.trainee && p.periodMonth === body.periodMonth && promiseState(p).outstanding > 0)) fail(409, "CONFLICT", "there is already an open promise for this month");
+      const p: PaymentPromise = { id: genId(), trainee: body.trainee, traineeName: tName(body.trainee), periodMonth: body.periodMonth, amount: body.amount, dueDay: body.dueDay, note: body.note, createdAt: new Date().toISOString(), createdBy: "demo", paidSince: 0, outstanding: body.amount, state: "open" };
+      promises.push(p); return yes(p);
+    }
+    return yes(promises.filter((p) => (!params.get("m") || p.periodMonth === params.get("m")) && (!params.get("trainee") || p.trainee === params.get("trainee"))).map(promiseState));
+  }
+  if (seg[0] === "trial-leads") {
+    if (seg.length === 1) {
+      if (method === "POST") { if (!String(body.name ?? "").trim()) fail(400, "VALIDATION", "name is required", "name"); const l: TrialLead = { id: genId(), name: body.name.trim(), phone: body.phone, source: body.source, status: "enquiry", trialDay: body.trialDay, followUpDay: body.followUpDay, notes: body.notes, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; leads.unshift(l); return yes(l); }
+      return yes(leads);
+    }
+    const l = leads.find((x) => x.id === seg[1]); if (!l) fail(404, "NOT_FOUND", "trial not found");
+    if (method === "PATCH") { if (body.status === "converted" && !body.trainee && !l.trainee) fail(400, "VALIDATION", "link the member before converting", "trainee"); if (body.status === "attended" && !l.trialAttendedAt) l.trialAttendedAt = new Date().toISOString(); Object.assign(l, body, { updatedAt: new Date().toISOString() }); }
+    return yes(l);
+  }
+  if (seg[0] === "trainees" && seg[2] === "progress") {
+    if (method === "POST") { if (![body.goal, body.skills, body.nextFocus, body.note].some((v) => String(v ?? "").trim())) fail(400, "VALIDATION", "add a goal, skill, focus or note", "note"); const p: ProgressNote = { id: genId(), trainee: seg[1], session: body.session, goal: body.goal, skills: body.skills, nextFocus: body.nextFocus, note: body.note, createdAt: new Date().toISOString(), createdBy: "demo" }; progressNotes.unshift(p); return yes(p); }
+    return yes(progressNotes.filter((p) => p.trainee === seg[1]));
+  }
+  if (path === "/follow-ups") {
+    const out: FollowUp[] = [];
+    for (const d of subscriptions(MONTH)) if (d.state === "partial" || d.state === "unpaid") out.push({ key: `dues:${d.trainee.id}:${MONTH}`, kind: "dues", title: d.trainee.name, detail: `${MONTH} dues: ${d.remaining.toFixed(2)} still owed`, phone: d.trainee.phone, trainee: d.trainee.id, href: `/payments?m=${MONTH}&focus=${d.trainee.id}`, amount: d.remaining });
+    for (const p of promises.map(promiseState)) if (p.state === "due" || p.state === "overdue") out.push({ key: `promise:${p.id}`, kind: "promise", title: p.traineeName, detail: `Promised ${p.outstanding.toFixed(2)} for ${p.periodMonth}`, phone: trainees.find((t) => t.id === p.trainee)?.phone, trainee: p.trainee, href: `/payments?m=${p.periodMonth}&focus=${p.trainee}`, amount: p.outstanding, dueDay: p.dueDay });
+    for (const l of leads) if (!(["converted", "lost"].includes(l.status)) && l.followUpDay && l.followUpDay <= TODAY) out.push({ key: `trial:${l.id}`, kind: "trial", title: l.name, detail: `Follow up after trial · ${l.status}`, phone: l.phone, href: `/trial-leads?focus=${l.id}`, dueDay: l.followUpDay });
+    for (const p of plans) { const v = withProgress(p); if (p.status === "active" && v.progress.remaining <= 2) out.push({ key: `plan:${p.id}`, kind: "plan", title: p.traineeName, detail: `${p.title}: ${v.progress.remaining} of ${v.progress.target} sessions left`, phone: trainees.find((t) => t.id === p.trainee)?.phone, trainee: p.trainee, href: `/trainees/${p.trainee}` }); }
+    const recent = new Set(sessions.filter((s) => s.status === "completed" && new Date(s.start).getTime() >= Date.now() - 21 * 86_400_000).flatMap((s) => s.attendees.filter((a) => a.status === "attended").map((a) => a.trainee)));
+    for (const t of trainees) if (t.status === "active" && !t.archivedAt && !recent.has(t.id) && new Date(t.createdAt).getTime() <= Date.now() - 21 * 86_400_000) out.push({ key: `inactive:${t.id}`, kind: "inactive", title: t.name, detail: "No attended class in 21 days", phone: t.phone, trainee: t.id, href: `/trainees/${t.id}` });
+    return yes(out.map((x) => ({ ...x, snoozedUntil: followUpSnoozes[x.key] })).filter((x) => params.get("show") === "snoozed" ? (x.snoozedUntil ?? "") > TODAY : (x.snoozedUntil ?? "") <= TODAY));
+  }
+  if (path === "/follow-ups/action") {
+    if (!["contacted", "snooze", "clear"].includes(body.action)) fail(400, "VALIDATION", "invalid action", "action");
+    followUpSnoozes[body.key] = body.action === "clear" ? "" : addDays(TODAY, Number(body.days) || 7);
+    return yes({ ok: true });
+  }
+  if (path === "/month-review") {
+    const month = method === "POST" ? body.month : (params.get("m") ?? MONTH);
+    if (method === "POST") { monthReviews[month] = { id: genId(), reviewedAt: new Date().toISOString(), reviewedBy: "demo", note: body.note }; return yes(monthReviews[month]); }
+    const rep = report(month);
+    return yes({ month, issues: { unclosedClasses: rep.sessions.notMarkedDone, unmarkedAttendance: rep.attendance.unmarked, unresolvedDues: rep.subscriptions.partial + rep.subscriptions.unpaid, cashDifferences: 0, lowStock: rep.inventory.lowNow + rep.inventory.outNow }, review: monthReviews[month] });
+  }
+  if (seg[0] === "sessions" && seg.length >= 3 && ["waitlist", "cancel-booking", "closeout"].includes(seg[2])) {
+    const s = sessions.find((x) => x.id === seg[1]); if (!s) fail(404, "NOT_FOUND", "session not found");
+    if (seg[2] === "closeout") {
+      if (s.status === "cancelled") fail(409, "CONFLICT", "a cancelled class cannot be closed");
+      if (new Date(s.start).getTime() - 30 * 60_000 > Date.now()) fail(422, "NOT_STARTED", "class has not started", "status");
+      if ((body.attendance ?? []).length !== s.attendees.length) fail(400, "VALIDATION", "mark every trainee", "attendance");
+      for (const a of s.attendees) { const row = body.attendance.find((x: { trainee: string }) => x.trainee === a.trainee); if (!row || !["attended", "no_show"].includes(row.status)) fail(400, "VALIDATION", "mark every trainee", "attendance"); a.status = row.status; }
+      s.status = "completed"; s.closeoutNote = body.note ?? ""; s.closedAt = new Date().toISOString(); s.updatedAt = s.closedAt; return yes(s);
+    }
+    if (seg[2] === "cancel-booking") {
+      if (s.status !== "scheduled") fail(409, "CONFLICT", "only a scheduled class can release a booking");
+      const at = s.attendees.findIndex((a) => a.trainee === body.trainee); if (at < 0) fail(404, "NOT_FOUND", "booking not found");
+      if (s.attendees[at].status !== "booked") fail(409, "CONFLICT", "attendance is already recorded");
+      const late = Date.now() + studioPolicy.cancelBeforeHours * 3_600_000 > new Date(s.start).getTime();
+      if (late && studioPolicy.lateCancellationAction === "no_show" && new Date(s.start).getTime() <= Date.now()) s.attendees[at].status = "no_show";
+      else { s.attendees.splice(at, 1); const first = new Date(s.start).getTime() > Date.now() && waitEntries.find((e) => e.session === s.id && e.status === "waiting"); if (first) first.status = "offered"; }
+      s.updatedAt = new Date().toISOString(); return yes({ session: s, late });
+    }
+    if (seg.length === 3) {
+      if (method === "POST") { if (s.status !== "scheduled" || new Date(s.start).getTime() <= Date.now()) fail(400, "VALIDATION", "waitlist is only for an upcoming class"); if (!s.capacity || s.attendees.length < s.capacity) fail(400, "VALIDATION", "this class has room; book directly"); if (s.attendees.some((a) => a.trainee === body.trainee) || waitEntries.some((e) => e.session === s.id && e.trainee === body.trainee && ["waiting", "offered"].includes(e.status))) fail(409, "DUPLICATE", "trainee is already booked or waiting"); const e: WaitlistEntry = { id: genId(), session: s.id, trainee: body.trainee, traineeName: tName(body.trainee), status: "waiting", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; waitEntries.push(e); return yes(e); }
+      return yes(waitEntries.filter((e) => e.session === s.id));
+    }
+    const e = waitEntries.find((x) => x.id === seg[3] && x.session === s.id); if (!e) fail(404, "NOT_FOUND", "offer not found");
+    if (seg[4] === "accept") { if (e.status !== "offered" || s.status !== "scheduled" || new Date(s.start).getTime() <= Date.now() || (s.capacity && s.attendees.length >= s.capacity)) fail(409, "CONFLICT", "place no longer open"); s.attendees.push({ trainee: e.trainee, traineeName: e.traineeName, status: "booked" }); e.status = "booked"; s.updatedAt = new Date().toISOString(); return yes(s); }
+    if (seg[4] === "decline") { const wasOffered = e.status === "offered"; e.status = "declined"; const next = wasOffered && waitEntries.find((x) => x.session === s.id && x.status === "waiting"); if (next) next.status = "offered"; return yes({ ok: true }); }
+  }
+  return { handled: false };
+}
+
 export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyInit | null): T {
   const [path, query = ""] = rawPath.split("?");
   const params = new URLSearchParams(query);
@@ -472,6 +578,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   const seg = path.split("/").filter(Boolean);
   const r = (v: unknown): T => v as unknown as T;
   const q = params.get("q");
+
+  const coach = coachDemo(path, method, body, params, seg);
+  if (coach.handled) return r(coach.value);
 
   if (path === "/health") return r({ status: "ok", db: true, authRequired: false, timezone: "Asia/Beirut", time: nowISO });
   if (path === "/dashboard") return r(dashboard());
@@ -719,8 +828,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       const inPeriod = periodFilter(params);
       const t = params.get("trainee");
       const pm = params.get("periodMonth");
+      const sid = params.get("sessionId");
       const ty = params.get("type");
-      const rows = payments.filter((p) => (!inPeriod || inPeriod(p.date)) && (!t || p.trainee === t) && (!pm || p.periodMonth === pm) && (!ty || p.type === ty)).sort((a, b) => b.date.localeCompare(a.date));
+      const rows = payments.filter((p) => (!inPeriod || inPeriod(p.date)) && (!t || p.trainee === t) && (!pm || p.periodMonth === pm) && (!sid || p.sessionId === sid) && (!ty || p.type === ty)).sort((a, b) => b.date.localeCompare(a.date));
       return r(listOrPage(searched(rows, q, (p) => [p.traineeName || p.type, p.note, p.reference, p.type, p.periodMonth]), params));
     }
     if (seg[1] === "export") {

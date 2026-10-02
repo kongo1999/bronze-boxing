@@ -123,6 +123,8 @@ export interface Session {
   seriesId?: string;
   status: SessionStatus;
   attendees: Attendee[];
+  closeoutNote?: string;
+  closedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -142,12 +144,47 @@ export interface Payment {
   method?: PayMethod;
   reference?: string;
   saleId?: string;
+  sessionId?: string;
   createdAt: string;
   createdBy?: string;
   voidedAt?: string;
   voidReason?: string;
   voidedBy?: string;
 }
+
+export interface PaymentPromise {
+  id: string; trainee: string; traineeName: string; periodMonth: string;
+  amount: number; dueDay: string; note?: string; cancelledAt?: string;
+  createdAt: string; createdBy: string; paidSince: number;
+  outstanding: number; state: "open" | "due" | "overdue" | "fulfilled" | "resolved" | "cancelled";
+}
+export interface WaitlistEntry {
+  id: string; session: string; trainee: string; traineeName: string;
+  status: "waiting" | "offered" | "booked" | "declined" | "cancelled";
+  offeredAt?: string; createdAt: string; updatedAt: string;
+}
+export interface ProgressNote {
+  id: string; trainee: string; session?: string; goal?: string; skills?: string;
+  nextFocus?: string; note?: string; createdAt: string; createdBy: string;
+}
+export interface TrialLead {
+  id: string; name: string; phone?: string; source?: string;
+  status: "enquiry" | "booked" | "attended" | "missed" | "converted" | "lost";
+  trialDay?: string; trialAttendedAt?: string; followUpDay?: string; notes?: string; trainee?: string;
+  createdAt: string; updatedAt: string;
+}
+export interface FollowUp {
+  key: string; kind: "dues" | "promise" | "trial" | "plan" | "inactive";
+  title: string; detail: string; phone?: string; trainee?: string;
+  href: string; dueDay?: string; amount?: number;
+  snoozedUntil?: string;
+}
+export interface MonthReview {
+  month: string;
+  issues: { unclosedClasses: number; unmarkedAttendance: number; unresolvedDues: number; cashDifferences: number; lowStock: number };
+  review?: { id: string; reviewedAt: string; reviewedBy: string; note?: string };
+}
+export interface StudioPolicy { id: string; cancelBeforeHours: number; lateCancellationAction: "allow" | "no_show" }
 
 export type PayMethod = "cash" | "card" | "bank_transfer" | "other";
 

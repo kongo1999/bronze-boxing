@@ -39,6 +39,7 @@ const form = reactive({
   method: "cash",
   reference: "",
   note: "",
+  sessionId: typeof q.sessionId === "string" ? q.sessionId : "",
 });
 
 // Without the roster the payment can't be attributed: saving waits for it.
@@ -111,6 +112,7 @@ async function submit() {
       method: form.method,
       reference: form.method === "cash" ? "" : form.reference,
       note: form.note,
+      sessionId: form.type === "dropin" || form.type === "private" ? form.sessionId || undefined : undefined,
     });
     invalidate("payments", "dues", "subs", "financials", "dashboard", "trainees");
     // Back to where Collect was tapped, with that trainee's row shown and
@@ -178,6 +180,7 @@ async function submit() {
         </template>
         <template v-else>Counts as cash in {{ monthLabel(cashMonth) }}.</template>
       </p>
+      <p v-if="form.sessionId && (form.type === 'dropin' || form.type === 'private')" class="text-xs text-bronze">Linked to the class you opened.</p>
 
       <div v-if="form.type === 'subscription' && form.trainee" class="rounded-xl border border-line bg-elevated px-3 py-2 text-xs" :class="overpaying ? 'text-overdue' : 'text-muted'">
         <template v-if="dueInfo">

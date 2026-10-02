@@ -85,6 +85,7 @@ async function addItem() {
 
 // ── Sell ───────────────────────────────────────────────────────────────────
 const sellFor = ref<string | null>(null);
+const sellPrompt = computed(() => route.query.act === "sell");
 const lastSale = ref<Sale>();
 async function sold(sale: Sale) {
   sellFor.value = null;
@@ -131,6 +132,7 @@ async function sold(sale: Sale) {
     <template v-else>
       <SearchInput v-model="q" label="Search stock and sales" placeholder="Search stock and sales…" :searching="salesSearching"
         :matches="q && !salesSearching && !itemSearching ? itemTotal + saleTotal : undefined" />
+      <p v-if="sellPrompt" class="rounded-xl border border-bronze/40 bg-bronze/10 px-3 py-2 text-sm">Search for the item, then tap Sell beside it.</p>
       <ChipGroup
         v-model="show"
         :options="[

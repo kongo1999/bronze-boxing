@@ -90,6 +90,7 @@ var studio = studioInfo{Name: "Bronze Boxing Club", Currency: "$"}
 
 type paymentInput struct {
 	Trainee     string     `json:"trainee"`
+	SessionID   string     `json:"sessionId"`
 	Amount      float64    `json:"amount"`
 	Type        string     `json:"type"`
 	PeriodMonth string     `json:"periodMonth"`
@@ -146,6 +147,13 @@ func (h *paymentHandler) list(c *fiber.Ctx) error {
 			return err
 		}
 		filter["trainee"] = tid
+	}
+	if sid := c.Query("sessionId"); sid != "" {
+		id, err := parseOID(sid, "sessionId")
+		if err != nil {
+			return err
+		}
+		filter["sessionId"] = id
 	}
 	if pm := c.Query("periodMonth"); pm != "" {
 		if !models.ValidMonth(pm) {
@@ -253,6 +261,33 @@ func (h *paymentHandler) create(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if in.SessionID != "" {
+		if p.Type != models.PayDropin && p.Type != models.PayPrivate {
+			return badField("sessionId", "only class payments can link to a session")
+		}
+		if trainee == nil {
+			return badField("trainee", "pick the trainee who attended the class")
+		}
+		sid, err := parseOID(in.SessionID, "sessionId")
+		if err != nil {
+			return err
+		}
+		s, err := findSession(ctx, h.store, sid)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, a := range s.Attendees {
+			if a.Trainee == trainee.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return badField("sessionId", "book the trainee into this class first")
+		}
+		p.SessionID = &sid
+	}
 	if p.Date, err = resolveRecordDate(in.Date, in.Day); err != nil {
 		return err
 	}
@@ -331,7 +366,10 @@ func (h *paymentHandler) update(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	next.ID, next.CreatedAt, next.CreatedBy, next.SaleID = prev.ID, prev.CreatedAt, prev.CreatedBy, prev.SaleID
+	if prev.SessionID != nil && (next.Type != models.PayDropin && next.Type != models.PayPrivate || next.Trainee == nil || prev.Trainee == nil || *next.Trainee != *prev.Trainee) {
+		return badField("sessionId", "a class payment must stay linked to the same trainee and a class payment type")
+	}
+	next.ID, next.CreatedAt, next.CreatedBy, next.SaleID, next.SessionID = prev.ID, prev.CreatedAt, prev.CreatedBy, prev.SaleID, prev.SessionID
 	next.Date = prev.Date
 	if in.Date != nil || in.Day != "" {
 		if next.Date, err = resolveRecordDate(in.Date, in.Day); err != nil {
