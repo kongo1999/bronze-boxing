@@ -16,11 +16,14 @@ import ChipGroup from "@/components/ui/ChipGroup.vue";
 import Button from "@/components/ui/Button.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import SearchInput from "@/components/ui/SearchInput.vue";
 
 const route = useRoute();
 const month = useQueryState("m", () => monthKey(), isMonthKey);
 type Show = "all" | "mismatch" | "uncounted";
 const show = useQueryState<Show>("show", () => "all", (v): v is Show => ["all", "mismatch", "uncounted"].includes(v as string));
+const q = ref("");
 
 const days = ref<ClosingDay[]>([]);
 const loading = ref(true);
@@ -42,7 +45,8 @@ watch(month, () => { loading.value = true; load(); }, { immediate: true });
 
 const mismatched = (d: ClosingDay) => d.difference !== undefined && Math.abs(d.difference) >= 0.01;
 const visible = computed(() =>
-  days.value.filter((d) => (show.value === "mismatch" ? mismatched(d) : show.value === "uncounted" ? d.counted === undefined : true)),
+  fuzzyFilter(days.value.filter((d) => (show.value === "mismatch" ? mismatched(d) : show.value === "uncounted" ? d.counted === undefined : true)),
+    q.value, (d) => [d.day, formatDay(d.day, { weekday: "long", month: "long", day: "numeric" }), d.note]),
 );
 const chips = computed(() => [
   { v: "all" as const, l: "All days", n: days.value.length },
@@ -86,6 +90,7 @@ async function save(d: ClosingDay) {
     </div>
 
     <MonthPicker v-model="month" />
+    <SearchInput v-if="days.length >= 8 || q" v-model="q" label="Search cash count days" placeholder="Search date or note…" :matches="q ? visible.length : undefined" />
     <ChipGroup v-model="show" :options="chips" label="Show days" />
 
     <Skeleton v-if="loading" :rows="4" />

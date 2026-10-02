@@ -23,7 +23,9 @@ import Button from "@/components/ui/Button.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import PlanCard from "@/components/PlanCard.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
+import Pagination from "@/components/ui/Pagination.vue";
 import { fuzzyFilter } from "@/lib/fuzzy";
+import { useServerList } from "@/lib/server-list";
 import Highlight from "@/components/ui/Highlight.vue";
 import { btnClasses } from "@/components/ui/button";
 import { inputCls } from "@/lib/ui";
@@ -138,6 +140,7 @@ async function assign(p: SessionPlan) {
   invalidate("sessions");
   loadPlans();
   loadSessions();
+  reloadUpcoming();
   if (done) toast(`Assigned ${done} session${done === 1 ? "" : "s"} to ${p.title}.`, "success");
 }
 
@@ -196,7 +199,12 @@ watch(histQ, () => {
   }, 200);
 });
 
-const upcoming = ref<Session[]>([]);
+const upcomingQ = ref("");
+const {
+  items: upcoming, total: upcomingTotal, page: upcomingPage, pageCount: upcomingPages,
+  from: upcomingFrom, to: upcomingTo, searching: upcomingSearching,
+  error: upcomingError, reload: reloadUpcoming,
+} = useServerList<Session>((q) => `/sessions?trainee=${id}&from=${encodeURIComponent(new Date().toISOString())}&status=scheduled${q ? `&q=${encodeURIComponent(q)}` : ""}`, upcomingQ, 8);
 const history = ref<Session[]>([]);
 const historyTotal = ref(0);
 const historyMore = ref(false);
@@ -205,12 +213,8 @@ async function loadSessions(append = false) {
   const now = new Date().toISOString();
   const my = ++sessToken;
   try {
-    const [up, past] = await Promise.all([
-      append ? Promise.resolve(upcoming.value) : api.get<Session[]>(`/sessions?trainee=${id}&from=${encodeURIComponent(now)}`),
-      api.get<Page<Session>>(`/sessions?trainee=${id}&to=${encodeURIComponent(now)}&order=desc&limit=10&offset=${append ? history.value.length : 0}${hq()}`),
-    ]);
+    const past = await api.get<Page<Session>>(`/sessions?trainee=${id}&to=${encodeURIComponent(now)}&order=desc&limit=10&offset=${append ? history.value.length : 0}${hq()}`);
     if (my !== sessToken) return;
-    upcoming.value = up.filter((s) => s.status !== "cancelled").slice(0, 5);
     history.value = append ? [...history.value, ...past.items] : past.items;
     historyTotal.value = past.total;
     historyMore.value = past.hasMore;
@@ -243,15 +247,17 @@ async function loadPayments(append = false) {
 loadPayments();
 const purchases = ref<Sale[]>([]);
 const purchasesTotal = ref(0);
+const purchasesMore = ref(false);
 let buyToken = 0;
-function loadPurchases() {
+function loadPurchases(append = false) {
   const my = ++buyToken;
   api
-    .get<Page<Sale>>(`/sales?trainee=${id}&limit=10${hq()}`)
+    .get<Page<Sale>>(`/sales?trainee=${id}&limit=10&offset=${append ? purchases.value.length : 0}${hq()}`)
     .then((pg) => {
       if (my !== buyToken) return;
-      purchases.value = pg.items;
+      purchases.value = append ? [...purchases.value, ...pg.items] : pg.items;
       purchasesTotal.value = pg.total;
+      purchasesMore.value = pg.hasMore;
     })
     .catch(() => {});
 }
@@ -462,8 +468,11 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
 
       <!-- Coming up -->
       <section class="space-y-2">
-        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Coming up</h2>
-        <p v-if="!upcoming.length" class="px-1 text-sm text-faint">Nothing booked.</p>
+        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Coming up · {{ upcomingTotal }}</h2>
+        <SearchInput v-if="upcomingTotal >= 8 || upcomingQ" v-model="upcomingQ" label="Search upcoming sessions"
+          placeholder="Search class or trainee…" :searching="upcomingSearching" :matches="upcomingQ && !upcomingSearching ? upcomingTotal : undefined" />
+        <Alert v-if="upcomingError">{{ upcomingError }} <button class="underline" @click="reloadUpcoming">Retry</button></Alert>
+        <p v-else-if="!upcoming.length" class="px-1 text-sm text-faint">{{ upcomingQ ? 'No upcoming sessions match.' : 'Nothing booked.' }}</p>
         <RouterLink
           v-for="s in upcoming"
           :key="s.id"
@@ -473,6 +482,7 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <span class="min-w-0 truncate text-sm">{{ s.title }}</span>
           <span class="shrink-0 text-xs text-faint">{{ formatDay(dayOf(s.start), { weekday: "short", month: "short", day: "numeric" }) }} · {{ formatTime(s.start) }}</span>
         </RouterLink>
+        <Pagination v-model="upcomingPage" :page-count="upcomingPages" :total="upcomingTotal" :from="upcomingFrom" :to="upcomingTo" label="upcoming sessions" />
       </section>
 
       <SearchInput v-model="histQ" label="Search this trainee's history" placeholder="Search history — sessions, payments, purchases…" />
@@ -534,6 +544,9 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
             </RouterLink>
           </li>
         </ul>
+        <div v-if="purchasesMore" class="flex justify-center">
+          <button :class="btnClasses('ghost', 'sm')" @click="loadPurchases(true)">Show more ({{ purchasesTotal - purchases.length }} left)</button>
+        </div>
       </section>
     </template>
 

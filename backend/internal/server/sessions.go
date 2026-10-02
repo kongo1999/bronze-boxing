@@ -228,6 +228,12 @@ func (h *sessionHandler) list(c *fiber.Ctx) error {
 	if s := c.Query("series"); s != "" {
 		filter["seriesId"] = s
 	}
+	if status := c.Query("status"); status != "" {
+		if err := oneOf("status", status, sessionStatuses...); err != nil {
+			return err
+		}
+		filter["status"] = status
+	}
 	sort := bson.D{{Key: "start", Value: 1}}
 	if c.Query("order") == "desc" {
 		sort = bson.D{{Key: "start", Value: -1}}

@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from "vue";
+import { ref, reactive, computed, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { Plus, Package, ChevronRight, CircleCheck } from "lucide-vue-next";
 import { api, errMsg } from "@/lib/api";
 import { useCachedAsync, invalidate } from "@/lib/cache";
-import { usePaged } from "@/lib/paginate";
 import type { InventoryItem, Trainee, Sale } from "@/lib/types";
 import { money, formatLongDate } from "@/lib/format";
 import { useQueryState, withBack } from "@/lib/route-state";
-import { shortage, byUrgency } from "@/lib/stock";
+import { shortage } from "@/lib/stock";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import Card from "@/components/ui/Card.vue";
 import Badge from "@/components/ui/Badge.vue";
@@ -21,7 +20,6 @@ import Pagination from "@/components/ui/Pagination.vue";
 import ChipGroup from "@/components/ui/ChipGroup.vue";
 import SellSheet from "@/components/SellSheet.vue";
 import Highlight from "@/components/ui/Highlight.vue";
-import { fuzzyFilter } from "@/lib/fuzzy";
 import { useServerList } from "@/lib/server-list";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
@@ -30,29 +28,24 @@ import { traineeOption } from "@/lib/options";
 const route = useRoute();
 const here = computed(() => route.fullPath);
 
-const { data: itemData, loading, error, reload } = useCachedAsync("inventory", () => api.get<InventoryItem[]>("/inventory"));
 const { data: trainees } = useCachedAsync("trainees", () => api.get<Trainee[]>("/trainees?archived=include"));
-const items = computed(() => itemData.value ?? []);
+const { data: stockSummary, reload: reloadSummary } = useCachedAsync("inventory:summary", () => api.get<{ active: number; archived: number; short: number }>("/inventory/summary"));
 
 type Show = "all" | "short" | "archived";
 const show = useQueryState<Show>("show", () => "all", (v): v is Show => ["all", "short", "archived"].includes(v as string));
-const activeItems = computed(() => items.value.filter((i) => i.active));
-const shortCount = computed(() => activeItems.value.filter((i) => shortage(i)).length);
-const archivedCount = computed(() => items.value.length - activeItems.value.length);
+const activeCount = computed(() => stockSummary.value?.active ?? 0);
+const shortCount = computed(() => stockSummary.value?.short ?? 0);
+const archivedCount = computed(() => stockSummary.value?.archived ?? 0);
 
 // One search over the shop: it narrows the stock list and the sales ledger
 // together, so "tee" shows the item and every tee that went out the door.
 const q = ref("");
 const term = computed(() => q.value.trim());
-const filteredItems = computed(() => {
-  const base =
-    show.value === "archived" ? items.value.filter((i) => !i.active)
-    : show.value === "short" ? activeItems.value.filter((i) => shortage(i))
-    : activeItems.value;
-  // A search ranks by match; otherwise shortages come first.
-  return term.value ? fuzzyFilter(base, term.value, (i) => [i.name, i.sku]) : [...base].sort(byUrgency);
-});
-const { page: itemPage, pageCount: itemPages, items: itemRows, total: itemTotal, from: itemFrom, to: itemTo } = usePaged(filteredItems, 10);
+const {
+  items: itemRows, total: itemTotal, page: itemPage, pageCount: itemPages, from: itemFrom, to: itemTo,
+  loading, searching: itemSearching, error, reload,
+} = useServerList<InventoryItem>((s) => `/inventory?active=${show.value === "archived" ? "false" : "true"}${show.value === "short" ? "&stock=short" : ""}${s ? `&q=${encodeURIComponent(s)}` : ""}`, term, 10);
+watch(show, () => { if (itemPage.value !== 1) itemPage.value = 1; else reload(); });
 // Sales are searched and paged by the API, over every sale — not just a page.
 const {
   items: saleRows, total: saleTotal, page: salePage, pageCount: salePages, from: saleFrom, to: saleTo,
@@ -81,7 +74,7 @@ async function addItem() {
     addTried.value = false;
     showAdd.value = false;
     invalidate("inventory");
-    await reload();
+    await Promise.all([reload(), reloadSummary()]);
     toast("Item added.", "success");
   } catch (e) {
     toast(errMsg(e, "Couldn't add item."), "error");
@@ -97,7 +90,7 @@ async function sold(sale: Sale) {
   sellFor.value = null;
   lastSale.value = sale;
   invalidate("inventory", "sales", "financials");
-  await Promise.all([reload(), reloadSales()]);
+  await Promise.all([reload(), reloadSales(), reloadSummary()]);
   toast(`Sold ${sale.qty} × ${sale.itemName}.`, "success");
 }
 </script>
@@ -128,7 +121,7 @@ async function sold(sale: Sale) {
       </div>
     </Card>
 
-    <Skeleton v-if="loading" :rows="5" />
+    <Skeleton v-if="loading || itemSearching" :rows="5" />
 
     <Alert v-else-if="error">
       {{ error }}
@@ -137,11 +130,11 @@ async function sold(sale: Sale) {
 
     <template v-else>
       <SearchInput v-model="q" label="Search stock and sales" placeholder="Search stock and sales…" :searching="salesSearching"
-        :matches="q && !salesSearching ? filteredItems.length + saleTotal : undefined" />
+        :matches="q && !salesSearching && !itemSearching ? itemTotal + saleTotal : undefined" />
       <ChipGroup
         v-model="show"
         :options="[
-          { v: 'all', l: 'In the shop', n: activeItems.length },
+          { v: 'all', l: 'In the shop', n: activeCount },
           { v: 'short', l: 'Needs restock', n: shortCount, tone: shortCount ? 'partial' : undefined },
           { v: 'archived', l: 'Archived', n: archivedCount || undefined },
         ]"
@@ -156,7 +149,7 @@ async function sold(sale: Sale) {
       </div>
 
       <EmptyState
-        v-if="filteredItems.length === 0"
+        v-if="itemTotal === 0"
         :icon="Package"
         :title="q ? 'No matching items' : show === 'short' ? 'Nothing needs restocking' : show === 'archived' ? 'No archived items' : 'No items yet'"
         :description="q ? 'Try a different name or SKU.' : show === 'all' ? 'Add gloves, wraps, water, merch to track stock and sales.' : undefined"

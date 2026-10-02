@@ -91,6 +91,15 @@ func main() {
 	}
 
 	app := server.New(cfg, store)
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		if err := server.WarmSearch(ctx, store); err != nil {
+			cancel()
+			log.Fatalf("search index warm-up failed: %v", err)
+		}
+		cancel()
+		log.Println("search index ready")
+	}
 
 	go func() {
 		if err := app.Listen(":" + cfg.Port); err != nil {

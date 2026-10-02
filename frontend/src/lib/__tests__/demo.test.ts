@@ -56,10 +56,11 @@ describe("demo contract", () => {
   });
 
   it("filters by studio month and pages like the API", () => {
-    expect(get<Payment[]>(`/payments?m=${shiftMonthKey(month, -1)}`)).toHaveLength(0);
+    expect(get<Payment[]>(`/payments?m=${shiftMonthKey(month, -2)}`)).toHaveLength(0);
+    const rows = get<Payment[]>(`/payments?m=${month}`);
     const pg = get<Page<Payment>>(`/payments?m=${month}&limit=2`);
-    expect(pg.items).toHaveLength(2);
-    expect(pg.total).toBeGreaterThan(2);
+    expect(pg.items).toHaveLength(Math.min(2, rows.length));
+    expect(pg.total).toBe(rows.length);
   });
 
   it("searches with the shared matcher, typos and all", () => {

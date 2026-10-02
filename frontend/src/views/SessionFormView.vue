@@ -19,6 +19,7 @@ import { backTarget } from "@/lib/route-state";
 import { toast } from "@/lib/toast";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import Highlight from "@/components/ui/Highlight.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -197,6 +198,9 @@ const recurringBody = () => ({
 
 // ── Recurring preview: every date, with clashes, before anything is saved ──
 const preview = ref<RecurringPreview>();
+const previewQ = ref("");
+const shownPreview = computed(() => fuzzyFilter(preview.value?.occurrences ?? [], previewQ.value,
+  (o) => [o.day, formatDay(o.day, { weekday: "short", month: "short", day: "numeric" }), o.conflict?.title, o.conflict ? "clash conflict" : "available"]));
 const previewError = ref<string>();
 const previewing = ref(false);
 let previewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -421,8 +425,11 @@ async function submit(override = false) {
               {{ preview.count }} session{{ preview.count === 1 ? "" : "s" }}
               <template v-if="preview.conflicts"> · <span class="font-semibold text-overdue">{{ preview.conflicts }} clash{{ preview.conflicts === 1 ? "" : "es" }} — adjust those dates or times</span></template>
             </p>
+            <SearchInput v-if="preview.occurrences.length >= 8 || previewQ" v-model="previewQ" label="Search preview dates"
+              placeholder="Search a date or clash…" :matches="previewQ ? shownPreview.length : undefined" />
             <ul class="max-h-48 space-y-0.5 overflow-y-auto">
-              <li v-for="o in preview.occurrences" :key="o.start" class="flex justify-between gap-2" :class="o.conflict ? 'text-overdue' : 'text-muted'">
+              <li v-if="previewQ && !shownPreview.length" class="text-faint">No preview dates match.</li>
+              <li v-for="o in shownPreview" :key="o.start" class="flex justify-between gap-2" :class="o.conflict ? 'text-overdue' : 'text-muted'">
                 <span>{{ formatDay(o.day, { weekday: "short", month: "short", day: "numeric" }) }} · {{ formatTime(o.start) }}</span>
                 <span v-if="o.conflict" class="truncate">clashes with {{ o.conflict.title }}</span>
               </li>

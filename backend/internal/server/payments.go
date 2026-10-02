@@ -28,6 +28,7 @@ func registerPayments(r fiber.Router, store *db.Store) {
 	g := r.Group("/payments")
 	g.Get("/", h.list)
 	g.Post("/", h.create)
+	g.Get("/summary", h.summary)
 	g.Get("/export", h.export)
 	g.Get("/:id/receipt", h.receipt)
 	g.Get("/:id", h.get)
@@ -37,6 +38,38 @@ func registerPayments(r fiber.Router, store *db.Store) {
 	r.Get("/subscriptions", h.subscriptions)
 	r.Get("/subscription-charges", h.charges)
 	r.Post("/subscription-charges/:id/adjust", h.adjust)
+}
+
+// summary keeps the money page totals independent of its paged payment rows.
+func (h *paymentHandler) summary(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	start, end, err := monthOrRange(c)
+	if err != nil {
+		return err
+	}
+	if c.Query("m") == "" && c.Query("from") == "" && c.Query("to") == "" {
+		return badField("m", "give a month or date range")
+	}
+	cur, err := h.store.Coll(models.CollPayments).Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"date": bson.M{"$gte": start, "$lt": end}}}},
+		{{Key: "$group", Value: bson.M{"_id": nil, "count": bson.M{"$sum": 1},
+			"collected": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{bson.M{"$ifNull": bson.A{"$voidedAt", nil}}, nil}}, "$amount", 0}}}}}},
+	})
+	if err != nil {
+		return err
+	}
+	var rows []struct {
+		Count     int64   `bson:"count" json:"count"`
+		Collected float64 `bson:"collected" json:"collected"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return c.JSON(fiber.Map{"count": 0, "collected": 0})
+	}
+	return c.JSON(rows[0])
 }
 
 // Payment types a user may record directly. "sale" payments exist only as
