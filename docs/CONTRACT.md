@@ -53,7 +53,8 @@ Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 ### Trainees
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/trainees?q=&archived=include\|only` | Array of [trainee](fixtures/trainee.json); archived trainees are left out unless asked for |
+| GET | `/trainees?q=&archived=include\|only&status=&skill=&dues=&sort=&m=&limit=&offset=` | Array of [trainee](fixtures/trainee.json) without `limit`, or a page with it. `status` active/inactive/all, `skill` beginner/intermediate/advanced/any, `dues` owing/partial/unpaid/paid/any, `sort` name/recent/owed. Archived trainees are left out unless asked for. Dues use `m` (current month by default). |
+| GET | `/trainees/summary` | `{active}` for the roster chip. |
 | POST | `/trainees` | Creates the trainee, its first membership term (billing from this month) and this month's charge |
 | GET | `/trainees/:id` | |
 | PUT | `/trainees/:id` | Details edit. A fee/status change appends a term: `termsApplyFrom: "next_month"` (default) or `"this_month"` (re-prices this month's issued charge; needs `termsReason`). A second change on the same day returns `DUPLICATE` with the existing term unless `termsConfirm: true`. |
@@ -73,6 +74,7 @@ fee going forward, from `feeFromMonth`). Historical dues never come from them.
 | GET | `/subscription-charges?trainee=&state=` | Stored charges, newest month first ([sample](fixtures/subscription-charges.json)) |
 | POST | `/subscription-charges/:id/adjust` | `{due, reason}` — audited; refused below what's paid (`DUE_BELOW_PAID`). Reconciles an imported charge. |
 | GET | `/payments?m=` \| `?from=&to=` `&trainee=&periodMonth=&type=` | By cash `date`; `periodMonth` matches the dues period at any cash date. With `limit`(+`offset`) the response is a page `{items,total,hasMore,offset,limit}`, otherwise the original array. A bare `/payments` (no filter, no limit) is refused rather than downloading everything. |
+| GET | `/payments/summary?m=` | `{count,collected}` for the selected cash month; count includes voided records, collected excludes them. A date range works too. |
 | POST | `/payments` | `{trainee, amount, type, periodMonth, date? \| day?, method?, reference?, note}` — `method` ∈ cash, card, bank_transfer, other (absent on old rows = "unspecified"). Subscriptions need a trainee and `periodMonth`, must fit the month's remaining balance (`OVERPAYMENT`), and a month with no dues is `NO_CHARGE`. [Sample](fixtures/payment-partial.json) |
 | GET | `/payments/:id` | |
 | PUT | `/payments/:id` | Correction; an amount change needs `reason`. Moves money between charges in one transaction. A sale mirror can't be reclassified (`LINKED_SALE`). |
@@ -100,7 +102,8 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Inventory & sales
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/inventory?active=true\|false&stock=short\|low\|out` | By name. `out` = no stock; `low` = at or under `lowStockThreshold` (when set); `short` = either |
+| GET | `/inventory?active=true\|false&stock=short\|low\|out&q=&limit=&offset=` | Array without `limit`, or a page with it. Paged stock without a search puts shortages first, then name. `out` = no stock; `low` = at or under `lowStockThreshold` (when set); `short` = either. |
+| GET | `/inventory/summary` | `{active,archived,short}` for shop filters. |
 | POST | `/inventory` | Create opens the item's stock ledger ([item](fixtures/item.json)) |
 | GET/PUT | `/inventory/:id` | PUT edits details; a PUT that changes `stock` is still accepted as a guarded correction (needs `reason`), but the adjustments endpoint is the normal path |
 | DELETE | `/inventory/:id` | Only for an item with no sales and no movement beyond its opening line; otherwise `CONFLICT` (details: sales, movements) — archive instead |
@@ -118,7 +121,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Sessions, reminders, dashboard, search, audit
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/sessions?from=&to=&trainee=&plan=&series=&order=desc&limit=&offset=` | `[from, to)` by `start`. With `limit` a page; without any filter or limit it's refused. |
+| GET | `/sessions?from=&to=&trainee=&plan=&series=&status=&order=desc&limit=&offset=` | `[from, to)` by `start`; `status` is scheduled/completed/cancelled. With `limit` a page; without any filter or limit it's refused. |
 | POST | `/sessions` | `durationMin` 1–1440; `capacity` (0 = no limit); attendees `{trainee, status, planId?}` must exist and be unique; a `planId` must fit the plan (`PLAN_MISMATCH`) and not overbook it (`PLAN_FULL`, `planOverride: true` to book anyway) ([sample](fixtures/session.json)) |
 | POST | `/sessions/recurring/preview` | Same body as `/recurring`; returns `{count, occurrences[{start, conflict?}], conflicts, planProblem?{code, error, details}}` without writing |
 | POST | `/sessions/recurring` | `{title, type, weekdays[0-6], time "HH:MM", durationMin, fromDay, toDay, attendees}` — studio days, inclusive; each occurrence is at the studio wall-clock `time` (stable across DST). Span ≤ 366 days, ≤ 200 occurrences. Every occurrence starts `scheduled`, even if dated in the past. Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates). Legacy `from`/`to` instants still accepted. Creates a `session_series` document (`plannedCount`) and all occurrences in one transaction; attendees start `booked`. |
@@ -134,7 +137,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | POST | `/trainees/:id/session-plans` | `{title, targetCount ≥ 1, startDate, endDate?, sessionType?, notes?}` |
 | GET | `/session-plans?trainees=a,b&status=` | Plans for several trainees (booking forms) |
 | GET/PATCH | `/session-plans/:id` | PATCH `{title?, targetCount?, startDate?, endDate?, sessionType?, status?, notes?, reason}` — a reason is required for target, dates or status changes; audited |
-| GET/POST | `/reminders` | `dueDay` (`YYYY-MM-DD`) preferred; `dueDate` accepted. Filters: `status=open\|done`, `priority`, `relatedType`+`relatedId` |
+| GET/POST | `/reminders` | `dueDay` (`YYYY-MM-DD`) preferred; `dueDate` accepted. Filters: `status=open\|done`, `priority`, `relatedType`+`relatedId`, `q`; `limit`/`offset` return a page. |
 | GET | `/reminders/counts` | `{overdue, today, open}` by effective (snoozed) studio day — the navigation badge |
 | GET/PUT/DELETE | `/reminders/:id` | Completing a recurring reminder creates the next instance |
 | POST | `/reminders/:id/snooze` | `{days}` or `{until}` |
@@ -145,7 +148,7 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 ### Monthly report
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (verified active at the report cutoff, `unknownAtMonthEnd` for legacy months before membership history began, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned, plans active from their audited state / `plansUnknown` when past state is unavailable / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold and revenue including sales linked to legacy payments, `legacyLinkedSales` count, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. Cash for a linked legacy sale remains counted once as its payment. |
+| GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (verified active at the report cutoff, `unknownAtMonthEnd` for legacy months before membership history began, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned and an `occurrenceId` to open the series, plans active from their audited state / `plansUnknown` when past state is unavailable / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold and revenue including sales linked to legacy payments, `legacyLinkedSales` count, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. Cash for a linked legacy sale remains counted once as its payment. |
 | GET | `/reports/monthly/export?m=` | The same report as CSV (Section, Metric, Value) |
 
 Shop refunds are attributed to the payment method of the sale they refund
@@ -164,13 +167,13 @@ longer ones; digits match exactly (phone fragments, references); words may be
 in any order; `PT` = private, `no show` = no-show, `tee` = t-shirt. Every
 query word must match, so unrelated records never appear.
 
-`?q=` on `/trainees`, `/payments`, `/sessions`, `/sales`, item stock movements and `/ledger`
+`?q=` on `/trainees`, `/payments`, `/sessions`, `/sales`, `/inventory`, `/reminders`, item stock movements and `/ledger`
 searches the whole filtered list on the server and returns it best match
 first, then pages it (`limit`/`offset` as usual) — a match that would sit on
 page five is still found. The list's other filters still apply.
 
 The server keeps an in-memory posting index of normalized character pairs
-and short-word prefixes for searchable records, built on first use. Ranking
+and short-word prefixes for searchable records, built before the API starts accepting requests. Ranking
 visits only plausible candidates; paged lists apply their database filters
 in bounded ID batches and fetch only the requested page as full documents.
 The index is kept current from a MongoDB change stream; before each search

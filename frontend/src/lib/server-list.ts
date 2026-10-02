@@ -19,6 +19,7 @@ export function useServerList<T>(url: (q: string) => string, term: Ref<string>, 
   async function load() {
     const my = ++token;
     error.value = "";
+    searching.value = true;
     try {
       const base = url((term.value ?? "").trim());
       const sep = base.includes("?") ? "&" : "?";

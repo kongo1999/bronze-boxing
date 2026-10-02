@@ -581,3 +581,9 @@ func searchIndexFor(store *db.Store) *searchIndex {
 	x, _ := indexes.LoadOrStore(store, newSearchIndex(store))
 	return x.(*searchIndex)
 }
+
+// WarmSearch builds the fuzzy index before the API begins accepting requests.
+// It also opens the change stream, so the first user query only ranks matches.
+func WarmSearch(ctx context.Context, store *db.Store) error {
+	return searchIndexFor(store).sync(ctx)
+}

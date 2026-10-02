@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { ChevronRight, UserPlus, Users, Phone, MessageCircle, SlidersHorizontal } from "lucide-vue-next";
 import { api } from "@/lib/api";
 import { useCachedAsync } from "@/lib/cache";
-import { usePaged } from "@/lib/paginate";
+import { useServerList } from "@/lib/server-list";
 import type { SubStatus, Trainee } from "@/lib/types";
 import { money, monthKey } from "@/lib/format";
 import { useQueryState, withBack } from "@/lib/route-state";
@@ -16,7 +16,6 @@ import Avatar from "@/components/ui/Avatar.vue";
 import Badge from "@/components/ui/Badge.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
-import { fuzzyFilter } from "@/lib/fuzzy";
 import Highlight from "@/components/ui/Highlight.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
@@ -38,7 +37,7 @@ const filtersOpen = ref(skill.value !== "any" || dues.value !== "any" || sort.va
 
 const month = monthKey();
 const archived = computed(() => show.value === "archived");
-const { data, loading, error, reload } = useCachedAsync("trainees", () => api.get<Trainee[]>("/trainees?archived=include"));
+const { data: rosterSummary } = useCachedAsync("trainees:summary", () => api.get<{ active: number }>("/trainees/summary"));
 // This month's dues, for the owed amount and the dues filter.
 const { data: subs } = useCachedAsync(`dues:${month}`, () => api.get<SubStatus[]>(`/subscriptions?m=${month}`));
 const duesBy = computed(() => new Map((subs.value ?? []).map((s) => [s.trainee.id, s])));
@@ -48,26 +47,11 @@ const owed = (t: Trainee) => {
 };
 
 const q = ref("");
-const filtered = computed(() => {
-  const term = q.value.trim();
-  const list = (data.value ?? []).filter((t) => {
-    if (archived.value ? !t.archivedAt : !!t.archivedAt) return false;
-    if (!archived.value && show.value !== "all" && t.status !== show.value) return false;
-    if (skill.value !== "any" && t.skillLevel !== skill.value) return false;
-    const s = duesBy.value.get(t.id);
-    if (dues.value === "owing" && !owed(t)) return false;
-    if ((dues.value === "partial" || dues.value === "unpaid" || dues.value === "paid") && s?.state !== dues.value) return false;
-    return true;
-  });
-  // A search ranks by match (name or phone, typos allowed); otherwise the chosen sort.
-  if (term) return fuzzyFilter(list, term, (t) => [t.name, t.phone]);
-  if (sort.value === "recent") list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  else if (sort.value === "owed") list.sort((a, b) => owed(b) - owed(a) || a.name.localeCompare(b.name));
-  else list.sort((a, b) => a.name.localeCompare(b.name));
-  return list;
-});
-const activeCount = computed(() => (data.value ?? []).filter((t) => !t.archivedAt && t.status === "active").length);
-const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
+const {
+  items, total, page, pageCount, from, to, loading, searching, error, reload,
+} = useServerList<Trainee>((term) => `/trainees?${archived.value ? "archived=only&" : ""}status=${archived.value ? "all" : show.value}&skill=${skill.value}&dues=${dues.value}&sort=${sort.value}&m=${month}${term ? `&q=${encodeURIComponent(term)}` : ""}`, q, 12);
+watch([show, skill, dues, sort], () => { if (page.value !== 1) page.value = 1; else reload(); });
+const activeCount = computed(() => rosterSummary.value?.active ?? 0);
 </script>
 
 <template>
@@ -80,7 +64,7 @@ const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
       </template>
     </PageHeader>
 
-    <SearchInput v-model="q" label="Search the crew" placeholder="Search by name or phone…" :matches="q ? filtered.length : undefined" />
+    <SearchInput v-model="q" label="Search the crew" placeholder="Search by name or phone…" :searching="searching" :matches="q ? total : undefined" />
 
     <div class="flex items-start gap-2">
       <ChipGroup
@@ -119,7 +103,7 @@ const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
       </div>
     </div>
 
-    <Skeleton v-if="loading" :rows="5" />
+    <Skeleton v-if="loading || searching" :rows="5" />
 
     <Alert v-else-if="error">
       {{ error }}
@@ -127,7 +111,7 @@ const { page, pageCount, items, total, from, to } = usePaged(filtered, 12);
     </Alert>
 
     <EmptyState
-      v-else-if="filtered.length === 0"
+      v-else-if="total === 0"
       :icon="Users"
       :title="q || dues !== 'any' || skill !== 'any' ? 'No matches' : archived ? 'No archived trainees' : 'No trainees here'"
       :description="q ? 'Try a different name or phone digits.' : archived ? 'Archived trainees keep their full history.' : 'Add your first trainee to start tracking dues and attendance.'"

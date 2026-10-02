@@ -25,6 +25,7 @@ func registerInventory(r fiber.Router, store *db.Store) {
 	g := r.Group("/inventory")
 	g.Get("/", h.list)
 	g.Post("/", h.create)
+	g.Get("/summary", h.summary)
 	g.Get("/:id", h.get)
 	g.Put("/:id", h.update)
 	g.Delete("/:id", h.remove)
@@ -75,6 +76,14 @@ func (h *inventoryHandler) list(c *fiber.Ctx) error {
 			return err
 		}
 	}
+	if c.Query("limit") != "" || c.Query("q") != "" {
+		addStockFilter(filter, stock)
+		if q, ok := searchQuery(c); ok {
+			return rankedFind(c, ctx, h.store, models.CollInventory, kindItem, filter, q,
+				func(i models.InventoryItem) primitive.ObjectID { return i.ID })
+		}
+		return h.pagedItems(c, ctx, filter)
+	}
 	cur, err := h.store.Coll(models.CollInventory).
 		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -94,6 +103,79 @@ func (h *inventoryHandler) list(c *fiber.Ctx) error {
 		}
 	}
 	return c.JSON(out)
+}
+
+func (h *inventoryHandler) pagedItems(c *fiber.Ctx, ctx context.Context, filter bson.M) error {
+	coll := h.store.Coll(models.CollInventory)
+	limit := min(max(atoiDefault(c.Query("limit"), 20), 1), 200)
+	offset := max(atoiDefault(c.Query("offset"), 0), 0)
+	total, err := coll.CountDocuments(ctx, filter)
+	if err != nil {
+		return err
+	}
+	low := bson.M{"$and": bson.A{
+		bson.M{"$gt": bson.A{"$stock", 0}},
+		bson.M{"$gt": bson.A{"$lowStockThreshold", 0}},
+		bson.M{"$lte": bson.A{"$stock", "$lowStockThreshold"}},
+	}}
+	rank := bson.M{"$switch": bson.M{"branches": bson.A{
+		bson.M{"case": bson.M{"$eq": bson.A{"$active", false}}, "then": 3},
+		bson.M{"case": bson.M{"$lte": bson.A{"$stock", 0}}, "then": 0},
+		bson.M{"case": low, "then": 1},
+	}, "default": 2}}
+	cur, err := coll.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$addFields", Value: bson.M{"_urgency": rank}}},
+		{{Key: "$sort", Value: bson.D{{Key: "_urgency", Value: 1}, {Key: "name", Value: 1}, {Key: "_id", Value: 1}}}},
+		{{Key: "$skip", Value: offset}},
+		{{Key: "$limit", Value: limit}},
+	})
+	if err != nil {
+		return err
+	}
+	items := []models.InventoryItem{}
+	if err := cur.All(ctx, &items); err != nil {
+		return err
+	}
+	return c.JSON(page[models.InventoryItem]{Items: items, Total: total, HasMore: int64(offset+len(items)) < total, Offset: offset, Limit: limit})
+}
+
+func addStockFilter(filter bson.M, stock string) {
+	low := bson.M{"$expr": bson.M{"$and": bson.A{
+		bson.M{"$gt": bson.A{"$stock", 0}},
+		bson.M{"$gt": bson.A{"$lowStockThreshold", 0}},
+		bson.M{"$lte": bson.A{"$stock", "$lowStockThreshold"}},
+	}}}
+	out := bson.M{"stock": bson.M{"$lte": 0}}
+	switch stock {
+	case "low":
+		filter["$expr"] = low["$expr"]
+	case "out":
+		filter["stock"] = out["stock"]
+	case "short":
+		filter["$or"] = bson.A{out, low}
+	}
+}
+
+func (h *inventoryHandler) summary(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	coll := h.store.Coll(models.CollInventory)
+	active, err := coll.CountDocuments(ctx, bson.M{"active": bson.M{"$ne": false}})
+	if err != nil {
+		return err
+	}
+	archived, err := coll.CountDocuments(ctx, bson.M{"active": false})
+	if err != nil {
+		return err
+	}
+	shortFilter := bson.M{"active": bson.M{"$ne": false}}
+	addStockFilter(shortFilter, "short")
+	short, err := coll.CountDocuments(ctx, shortFilter)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"active": active, "archived": archived, "short": short})
 }
 
 func findItem(ctx context.Context, store *db.Store, id primitive.ObjectID) (models.InventoryItem, error) {

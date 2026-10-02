@@ -3,7 +3,7 @@
 // still owes), trainees, classes, attendance and the shop. Every figure
 // comes from one server aggregation shared with the CSV, and links to the
 // rows behind it. Printable; any past month by the picker or a direct jump.
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { Download, Printer, RefreshCw, TrendingDown, TrendingUp } from "lucide-vue-next";
 import { api, errMsg } from "@/lib/api";
@@ -59,8 +59,37 @@ async function exportCSV() {
     toast(errMsg(e, "Couldn't export the report."), "error");
   }
 }
-function printIt() {
+let closedForPrint: HTMLDetailsElement[] = [];
+let savedPrintQueries: [string, string, string] | undefined;
+function preparePrint() {
+  if (!savedPrintQueries) savedPrintQueries = [payerQ.value, seriesQ.value, stockQ.value];
   payerQ.value = "";
+  seriesQ.value = "";
+  stockQ.value = "";
+  if (closedForPrint.length) return;
+  closedForPrint = [...document.querySelectorAll<HTMLDetailsElement>(".report details")].filter((d) => !d.open);
+  closedForPrint.forEach((d) => { d.open = true; });
+}
+function finishPrint() {
+  closedForPrint.forEach((d) => { d.open = false; });
+  closedForPrint = [];
+  if (savedPrintQueries) {
+    [payerQ.value, seriesQ.value, stockQ.value] = savedPrintQueries;
+    savedPrintQueries = undefined;
+  }
+}
+onMounted(() => {
+  window.addEventListener("beforeprint", preparePrint);
+  window.addEventListener("afterprint", finishPrint);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeprint", preparePrint);
+  window.removeEventListener("afterprint", finishPrint);
+  finishPrint();
+});
+async function printIt() {
+  preparePrint();
+  await nextTick();
   window.print();
 }
 
@@ -70,8 +99,12 @@ const payerQ = ref("");
 const partialPayers = computed(() => fuzzyFilter(s.value?.partialPayers ?? [], payerQ.value, (p) => [p.name]));
 const unpaidPayers = computed(() => fuzzyFilter(s.value?.unpaidPayers ?? [], payerQ.value, (p) => [p.name]));
 const ss = computed(() => rep.value?.sessions);
+const seriesQ = ref("");
+const shownSeries = computed(() => fuzzyFilter(ss.value?.series ?? [], seriesQ.value, (se) => [se.title, se.seriesId]));
 const at = computed(() => rep.value?.attendance);
 const inv = computed(() => rep.value?.inventory);
+const stockQ = ref("");
+const shownStock = computed(() => fuzzyFilter(inv.value?.stock ?? [], stockQ.value, (st) => [st.name]));
 const entries = (m?: Record<string, number>) => Object.entries(m ?? {}).filter(([, v]) => v !== 0).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
 const pctText = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v}%`);
 const change = (v: number | null | undefined) => (v === null || v === undefined ? "" : `${v > 0 ? "+" : ""}${v}% vs ${monthLabel(prevMonth.value)}`);
@@ -245,10 +278,14 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
           </dl>
           <details v-if="ss.series.length" class="text-sm">
             <summary class="min-h-10 cursor-pointer content-center font-medium text-bronze">Series · {{ ss.series.length }}</summary>
-            <div v-for="se in ss.series" :key="se.seriesId" class="flex min-h-8 justify-between gap-2">
+            <SearchInput v-if="ss.series.length >= 8 || seriesQ" v-model="seriesQ" label="Search this month's series"
+              placeholder="Search series…" :matches="seriesQ ? shownSeries.length : undefined" data-print-hide />
+            <p v-if="seriesQ && !shownSeries.length" class="text-xs text-faint">No series match.</p>
+            <RouterLink v-for="se in shownSeries" :key="se.seriesId"
+              :to="withBack(`/schedule/${se.occurrenceId}`, here)" class="flex min-h-10 items-center justify-between gap-2 hover:text-bronze">
               <span class="min-w-0 truncate">{{ se.title }}</span>
               <span class="shrink-0 tnum">{{ se.completed }}/{{ se.planned || "?" }} <span class="text-xs text-faint">({{ se.inMonth }} this month)</span></span>
-            </div>
+            </RouterLink>
           </details>
           <p class="text-[0.6875rem] text-faint">Cancelled classes are left out of every other figure. Nothing is assumed done just because its time passed.</p>
         </Card>
@@ -295,10 +332,14 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
           </div>
           <details v-if="inv.stock.length" class="text-sm">
             <summary class="min-h-10 cursor-pointer content-center font-medium text-bronze">Stock at month end</summary>
-            <div v-for="st in inv.stock" :key="st.itemId" class="flex min-h-8 justify-between gap-2">
+            <SearchInput v-if="inv.stock.length >= 8 || stockQ" v-model="stockQ" label="Search stock in this report"
+              placeholder="Search item…" :matches="stockQ ? shownStock.length : undefined" data-print-hide />
+            <p v-if="stockQ && !shownStock.length" class="text-xs text-faint">No items match.</p>
+            <RouterLink v-for="st in shownStock" :key="st.itemId"
+              :to="withBack(`/inventory/${st.itemId}`, here)" class="flex min-h-10 items-center justify-between gap-2 hover:text-bronze">
               <span class="min-w-0 truncate">{{ st.name }}</span>
               <span class="shrink-0 tnum">{{ st.atMonthEnd ?? "—" }} <span class="text-xs text-faint">(now {{ st.now }})</span></span>
-            </div>
+            </RouterLink>
             <p class="pt-1 text-[0.6875rem] text-faint">From the stock history; “—” means tracking began after this month.</p>
           </details>
         </Card>

@@ -496,7 +496,7 @@ export interface MonthlyReport {
     notMarkedDone: number;
     completionPct: number | null;
     seriesCreated: number;
-    series: { seriesId: string; title: string; completed: number; planned: number; inMonth: number }[];
+    series: { seriesId: string; occurrenceId: string; title: string; completed: number; planned: number; inMonth: number }[];
     plansActive: number;
     plansUnknown: number;
     planCredits: number;

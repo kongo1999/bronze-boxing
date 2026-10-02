@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ func registerTrainees(r fiber.Router, store *db.Store) {
 	g := r.Group("/trainees")
 	g.Get("/", h.list)
 	g.Post("/", h.create)
+	g.Get("/summary", h.summary)
 	g.Get("/:id", h.get)
 	g.Put("/:id", h.update)
 	g.Delete("/:id", h.remove)
@@ -93,6 +95,58 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 	default:
 		filter["archivedAt"] = nil
 	}
+	if status := c.Query("status"); status != "" && status != "all" {
+		if err := oneOf("status", status, traineeStatuses...); err != nil {
+			return err
+		}
+		filter["status"] = status
+	}
+	if skill := c.Query("skill"); skill != "" && skill != "any" {
+		if err := oneOf("skill", skill, models.SkillBeginner, models.SkillIntermediate, models.SkillAdvanced); err != nil {
+			return err
+		}
+		filter["skillLevel"] = skill
+	}
+	dues := c.Query("dues")
+	if dues != "" && dues != "any" {
+		if err := oneOf("dues", dues, "owing", "partial", "unpaid", "paid"); err != nil {
+			return err
+		}
+	}
+	sortBy := c.Query("sort")
+	if sortBy != "" {
+		if err := oneOf("sort", sortBy, "name", "recent", "owed"); err != nil {
+			return err
+		}
+	}
+	if dues == "" || dues == "any" {
+		if sortBy != "owed" {
+			if q, ok := searchQuery(c); ok {
+				return rankedFind(c, ctx, h.store, models.CollTrainees, kindTrainee, filter, q,
+					func(t models.Trainee) primitive.ObjectID { return t.ID })
+			}
+			sort := bson.D{{Key: "name", Value: 1}, {Key: "_id", Value: 1}}
+			if sortBy == "recent" {
+				sort = bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}
+			}
+			return pagedFind[models.Trainee](c, ctx, h.store.Coll(models.CollTrainees), filter, sort)
+		}
+	}
+	month := c.Query("m")
+	if month == "" {
+		month = models.MonthKey(time.Now())
+	}
+	if !models.ValidMonth(month) {
+		return badField("m", "m must be YYYY-MM")
+	}
+	rows, err := listDues(ctx, h.store, month)
+	if err != nil {
+		return err
+	}
+	byID := map[primitive.ObjectID]subRow{}
+	for _, row := range rows {
+		byID[row.Trainee.ID] = row
+	}
 	cur, err := h.store.Coll(models.CollTrainees).
 		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -102,6 +156,17 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 	if err := cur.All(ctx, &out); err != nil {
 		return err
 	}
+	filtered := out[:0]
+	for _, t := range out {
+		row, ok := byID[t.ID]
+		want := dues == "" || dues == "any" ||
+			(dues == "owing" && ok && (row.State == "partial" || row.State == "unpaid") && row.Remaining > 0) ||
+			(ok && row.State == dues)
+		if want {
+			filtered = append(filtered, t)
+		}
+	}
+	out = filtered
 	// The roster is small and already loaded: rank it with the shared
 	// matcher (name or phone), best match first.
 	if q, ok := searchQuery(c); ok {
@@ -116,7 +181,36 @@ func (h *traineeHandler) list(c *fiber.Ctx) error {
 		}
 		out = hits
 	}
+	if _, ok := searchQuery(c); !ok && sortBy == "owed" {
+		sort.SliceStable(out, func(i, j int) bool {
+			owed := func(t models.Trainee) float64 {
+				r := byID[t.ID]
+				if r.State == "partial" || r.State == "unpaid" {
+					return r.Remaining
+				}
+				return 0
+			}
+			return owed(out[i]) > owed(out[j]) || owed(out[i]) == owed(out[j]) && out[i].Name < out[j].Name
+		})
+	}
+	if c.Query("limit") != "" {
+		limit := min(max(atoiDefault(c.Query("limit"), 20), 1), 200)
+		offset := max(atoiDefault(c.Query("offset"), 0), 0)
+		start := min(offset, len(out))
+		end := min(start+limit, len(out))
+		return c.JSON(page[models.Trainee]{Items: out[start:end], Total: int64(len(out)), HasMore: end < len(out), Offset: offset, Limit: limit})
+	}
 	return c.JSON(out)
+}
+
+func (h *traineeHandler) summary(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	n, err := h.store.Coll(models.CollTrainees).CountDocuments(ctx, bson.M{"archivedAt": nil, "status": models.StatusActive})
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"active": n})
 }
 
 func (h *traineeHandler) get(c *fiber.Ctx) error {

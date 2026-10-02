@@ -79,11 +79,12 @@ type reportTrainees struct {
 }
 
 type reportSeries struct {
-	SeriesID  string `json:"seriesId"`
-	Title     string `json:"title"`
-	Completed int    `json:"completed"`
-	Planned   int    `json:"planned"`
-	InMonth   int    `json:"inMonth"`
+	SeriesID     string `json:"seriesId"`
+	OccurrenceID string `json:"occurrenceId"` // an occurrence in this month to open the series
+	Title        string `json:"title"`
+	Completed    int    `json:"completed"`
+	Planned      int    `json:"planned"`
+	InMonth      int    `json:"inMonth"`
 }
 
 type reportSessions struct {
@@ -487,6 +488,7 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 		for _, id := range ids {
 			p := planned[id]
 			title := p.Title
+			occurrenceID := ""
 			if title == "" {
 				for _, s := range sessions {
 					if s.SeriesID == id {
@@ -495,7 +497,13 @@ func reportPeople(ctx context.Context, store *db.Store, rep *monthlyReport, from
 					}
 				}
 			}
-			ss.Series = append(ss.Series, reportSeries{SeriesID: id, Title: title, Completed: completed[id], Planned: p.PlannedCount, InMonth: seriesInMonth[id]})
+			for _, s := range sessions {
+				if s.SeriesID == id {
+					occurrenceID = s.ID.Hex()
+					break
+				}
+			}
+			ss.Series = append(ss.Series, reportSeries{SeriesID: id, OccurrenceID: occurrenceID, Title: title, Completed: completed[id], Planned: p.PlannedCount, InMonth: seriesInMonth[id]})
 		}
 		sort.Slice(ss.Series, func(i, j int) bool { return ss.Series[i].Title < ss.Series[j].Title })
 	}

@@ -1,18 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { Plus, Bell, Check, Trash2, Pencil, Repeat, AlarmClock, Link2 } from "lucide-vue-next";
 import { api, errMsg } from "@/lib/api";
-import { useCachedAsync, invalidate, writeCache } from "@/lib/cache";
-import { usePaged } from "@/lib/paginate";
+import { invalidate } from "@/lib/cache";
+import { useServerList } from "@/lib/server-list";
 import type { Priority, Reminder } from "@/lib/types";
-import { addDays, formatDay, todayKey } from "@/lib/studio";
+import { addDays, dayOf, formatDay, todayKey } from "@/lib/studio";
 import { useQueryState, withBack } from "@/lib/route-state";
 import PageHeader from "@/components/ui/PageHeader.vue";
 import EmptyState from "@/components/ui/EmptyState.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
-import { fuzzyFilter } from "@/lib/fuzzy";
 import Highlight from "@/components/ui/Highlight.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
@@ -21,23 +20,33 @@ import { toast } from "@/lib/toast";
 import { refreshBadges } from "@/lib/badges";
 
 const route = useRoute();
-const { data, loading, error, reload } = useCachedAsync("reminders", () => api.get<Reminder[]>("/reminders"));
 
 // A reminder wants attention on its due day, or later if it was snoozed.
-const effectiveDay = (r: Reminder) => (r.snoozedUntil && r.snoozedUntil > r.dueDay ? r.snoozedUntil : r.dueDay);
+const effectiveDay = (r: Reminder) => {
+  const due = r.dueDay || dayOf(r.dueDate);
+  return r.snoozedUntil && r.snoozedUntil > due ? r.snoozedUntil : due;
+};
 
 type PriFilter = "all" | Priority;
 const priority = useQueryState<PriFilter>("priority", () => "all", (v): v is PriFilter => ["all", "high", "normal", "low"].includes(v as string));
 const showDone = useQueryState<"0" | "1">("done", () => "0", (v): v is "0" | "1" => v === "0" || v === "1");
 
 const q = ref("");
-const filtered = computed(() =>
-  fuzzyFilter(
-    (data.value ?? []).filter((r) => priority.value === "all" || r.priority === priority.value),
-    q.value,
-    (r) => [r.title, r.relatedLabel],
-  ),
-);
+const url = (status: "open" | "done", term: string) =>
+  `/reminders?status=${status}${priority.value !== "all" ? `&priority=${priority.value}` : ""}${term ? `&q=${encodeURIComponent(term)}` : ""}`;
+const {
+  items: openRows, total: openTotal, page: openPage, pageCount: openPages, from: openFrom, to: openTo,
+  loading: openLoading, searching: openSearching, error: openError, reload: reloadOpen,
+} = useServerList<Reminder>((term) => url("open", term), q, 12);
+const {
+  items: doneRows, total: doneTotal, page: donePage, pageCount: donePages, from: doneFrom, to: doneTo,
+  loading: doneLoading, searching: doneSearching, error: doneError, reload: reloadDone,
+} = useServerList<Reminder>((term) => url("done", term), q, 10);
+watch(priority, () => {
+  if (openPage.value !== 1) openPage.value = 1; else reloadOpen();
+  if (donePage.value !== 1) donePage.value = 1; else reloadDone();
+});
+const reload = () => Promise.all([reloadOpen(), reloadDone()]);
 
 // Open reminders grouped by when they need attention; done ones kept apart.
 const RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 };
@@ -45,18 +54,14 @@ const byDue = (a: Reminder, b: Reminder) =>
   effectiveDay(a).localeCompare(effectiveDay(b)) || RANK[a.priority] - RANK[b.priority];
 const groups = computed(() => {
   const today = todayKey();
-  const open = filtered.value.filter((r) => !r.done).sort(byDue);
+  const open = openRows.value.slice().sort(byDue);
   return [
     { key: "overdue", label: "Overdue", tone: "text-overdue", items: open.filter((r) => effectiveDay(r) < today) },
     { key: "today", label: "Today", tone: "text-bronze", items: open.filter((r) => effectiveDay(r) === today) },
     { key: "upcoming", label: "Upcoming", tone: "text-faint", items: open.filter((r) => effectiveDay(r) > today) },
   ].filter((g) => g.items.length > 0);
 });
-const done = computed(() =>
-  filtered.value.filter((r) => r.done).sort((a, b) => (b.doneAt ?? b.dueDay).localeCompare(a.doneAt ?? a.dueDay)),
-);
-const { page, pageCount, items: doneItems, total, from, to } = usePaged(done, 10);
-const openCount = computed(() => groups.value.reduce((n, g) => n + g.items.length, 0));
+const doneItems = computed(() => doneRows.value.slice().sort((a, b) => (b.doneAt ?? b.dueDay).localeCompare(a.doneAt ?? a.dueDay)));
 
 function dueLabel(r: Reminder): string {
   const day = effectiveDay(r);
@@ -81,8 +86,7 @@ async function toggle(r: Reminder) {
     await api.put(`/reminders/${r.id}`, { done: next });
     refreshBadges(true);
     invalidate("dashboard");
-    if (r.recurrence) reload();
-    else if (data.value) writeCache("reminders", data.value);
+    await reload();
   } catch (e) {
     r.done = !next; // revert
     toast(errMsg(e, "Couldn't update that reminder."), "error");
@@ -93,24 +97,20 @@ async function snooze(r: Reminder, days: number) {
     const updated = await api.post<Reminder>(`/reminders/${r.id}/snooze`, { days });
     refreshBadges(true);
     Object.assign(r, updated);
-    if (data.value) writeCache("reminders", data.value);
+    await reload();
     toast(`Snoozed until ${formatDay(updated.snoozedUntil ?? "", { weekday: "short", month: "short", day: "numeric" })}.`, "success");
   } catch (e) {
     toast(errMsg(e, "Couldn't snooze that reminder."), "error");
   }
 }
 async function remove(r: Reminder) {
-  const list = data.value;
-  if (!list) return;
   if (!confirm(`Delete "${r.title}"?`)) return;
-  const idx = list.indexOf(r);
-  if (idx >= 0) list.splice(idx, 1); // optimistic removal
   try {
     await api.del(`/reminders/${r.id}`);
     refreshBadges(true);
-    writeCache("reminders", list);
+    await reload();
   } catch {
-    reload(); // restore true state on failure
+    await reload();
     toast("Couldn't delete that reminder.", "error");
   }
 }
@@ -131,7 +131,7 @@ const chips: { v: PriFilter; l: string }[] = [
       </template>
     </PageHeader>
 
-    <SearchInput v-model="q" placeholder="Search reminders…" />
+    <SearchInput v-model="q" placeholder="Search reminders…" :searching="openSearching || doneSearching" :matches="q ? openTotal + doneTotal : undefined" />
 
     <div class="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Priority">
       <button
@@ -149,16 +149,16 @@ const chips: { v: PriFilter; l: string }[] = [
         class="ml-auto min-h-10 rounded-lg px-3 text-xs font-medium text-faint hover:text-fg"
         :aria-pressed="showDone === '1'"
         @click="showDone = showDone === '1' ? '0' : '1'"
-      >{{ showDone === "1" ? "Hide done" : `Show done (${done.length})` }}</button>
+      >{{ showDone === "1" ? "Hide done" : `Show done (${doneTotal})` }}</button>
     </div>
 
-    <Skeleton v-if="loading" :rows="4" />
-    <Alert v-else-if="error">
-      {{ error }}
+    <Skeleton v-if="openLoading || openSearching || (showDone === '1' && (doneLoading || doneSearching))" :rows="4" />
+    <Alert v-else-if="openError || (showDone === '1' && doneError)">
+      {{ openError || doneError }}
       <button class="ml-1 font-medium underline" @click="reload">Retry</button>
     </Alert>
     <EmptyState
-      v-else-if="openCount === 0 && (showDone === '0' || done.length === 0)"
+      v-else-if="openTotal === 0 && (showDone === '0' || doneTotal === 0)"
       :icon="Bell"
       :title="q || priority !== 'all' ? 'No matches' : 'Nothing to do'"
       :description="q || priority !== 'all' ? 'Try a different word or priority.' : 'Add things you need to remember this week.'"
@@ -166,7 +166,7 @@ const chips: { v: PriFilter; l: string }[] = [
 
     <template v-else>
       <section v-for="g in groups" :key="g.key" class="space-y-2">
-        <h2 class="px-1 label-eyebrow text-[0.625rem]" :class="g.tone">{{ g.label }} · {{ g.items.length }}</h2>
+        <h2 class="px-1 label-eyebrow text-[0.625rem]" :class="g.tone">{{ g.label }}</h2>
         <ul class="space-y-2">
           <li v-for="r in g.items" :key="r.id" class="rounded-xl border border-line bg-surface px-1 py-1">
             <div class="flex items-center gap-1">
@@ -207,8 +207,10 @@ const chips: { v: PriFilter; l: string }[] = [
         </ul>
       </section>
 
-      <section v-if="showDone === '1' && done.length" class="space-y-2">
-        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Done · {{ done.length }}</h2>
+      <Pagination v-model="openPage" :page-count="openPages" :total="openTotal" :from="openFrom" :to="openTo" label="open reminders" />
+
+      <section v-if="showDone === '1' && doneTotal" class="space-y-2">
+        <h2 class="px-1 label-eyebrow text-[0.625rem] text-faint">Done · {{ doneTotal }}</h2>
         <ul class="space-y-2">
           <li v-for="r in doneItems" :key="r.id" class="flex items-center gap-1 rounded-xl border border-line bg-surface px-1 py-1 opacity-60">
             <button class="grid h-10 w-10 shrink-0 place-items-center rounded-full" :aria-label="`Mark “${r.title}” not done`" @click="toggle(r)">
@@ -223,7 +225,7 @@ const chips: { v: PriFilter; l: string }[] = [
             <button class="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-faint hover:bg-overdue/10 hover:text-overdue" :aria-label="`Delete “${r.title}”`" @click="remove(r)"><Trash2 class="h-4 w-4" /></button>
           </li>
         </ul>
-        <Pagination v-model="page" :page-count="pageCount" :total="total" :from="from" :to="to" label="done" />
+        <Pagination v-model="donePage" :page-count="donePages" :total="doneTotal" :from="doneFrom" :to="doneTo" label="done" />
       </section>
     </template>
   </div>

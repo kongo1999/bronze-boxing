@@ -15,6 +15,8 @@ import Button from "@/components/ui/Button.vue";
 import Skeleton from "@/components/ui/Skeleton.vue";
 import Alert from "@/components/ui/Alert.vue";
 import SearchSelect from "@/components/ui/SearchSelect.vue";
+import SearchInput from "@/components/ui/SearchInput.vue";
+import { fuzzyFilter } from "@/lib/fuzzy";
 import AuditTrail from "@/components/ui/AuditTrail.vue";
 import { inputCls } from "@/lib/ui";
 import { toast } from "@/lib/toast";
@@ -31,6 +33,8 @@ const here = computed(() => route.fullPath);
 const { data: sale, loading, error, reload } = useCachedAsync(`sales:${id}`, () => api.get<Sale>(`/sales/${id}`));
 const { data: trainees } = useCachedAsync("trainees", () => api.get<Trainee[]>("/trainees?archived=include"));
 const returns = ref<SaleReturn[]>([]);
+const returnQ = ref("");
+const shownReturns = computed(() => fuzzyFilter(returns.value, returnQ.value, (r) => [r.reason, r.date]));
 async function loadReturns() {
   try {
     returns.value = await api.get<SaleReturn[]>(`/sales/${id}/returns`);
@@ -249,12 +253,14 @@ async function voidSale() {
 
         <div v-if="returns.length" class="mt-4 border-t border-line pt-3">
           <p class="label-eyebrow text-[0.6rem] text-faint">Returns</p>
+          <SearchInput v-if="returns.length >= 8 || returnQ" v-model="returnQ" label="Search this sale's returns" placeholder="Search reason or date…" :matches="returnQ ? shownReturns.length : undefined" />
           <ul class="mt-1 space-y-1 text-sm">
-            <li v-for="r in returns" :key="r.id" class="flex justify-between gap-3">
+            <li v-for="r in shownReturns" :key="r.id" class="flex justify-between gap-3">
               <span class="min-w-0 truncate">{{ r.qty }} returned · {{ r.reason }} <span class="text-faint">· {{ formatLongDate(r.date) }}</span></span>
               <span class="shrink-0 tnum text-overdue">−{{ money(r.amount) }}</span>
             </li>
           </ul>
+          <p v-if="returnQ && !shownReturns.length" class="text-sm text-faint">No returns match that search.</p>
         </div>
 
         <div class="mt-4 flex border-t border-line pt-3">

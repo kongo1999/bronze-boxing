@@ -5,6 +5,7 @@ import { Plus, Receipt, Download, ChevronRight, SlidersHorizontal, FileText } fr
 import { api, errMsg } from "@/lib/api";
 import { readCache, writeCache, invalidate } from "@/lib/cache";
 import { usePaged } from "@/lib/paginate";
+import { useServerList } from "@/lib/server-list";
 import type { Payment, SubStatus, SubState } from "@/lib/types";
 import { money, monthKey, monthLabel, formatLongDate } from "@/lib/format";
 import { isMonthKey } from "@/lib/studio";
@@ -42,7 +43,7 @@ const filter = useQueryState<DuesFilter>("show", () => "all", (v): v is DuesFilt
 const here = computed(() => route.fullPath);
 
 const subs = ref<SubStatus[]>([]);
-const payments = ref<Payment[]>([]);
+const paymentSummary = ref({ count: 0, collected: 0 });
 const loading = ref(false);
 const error = ref<string>();
 let loaded = false; // have we ever shown real data? distinguishes empty from not-yet-loaded
@@ -53,14 +54,14 @@ async function load() {
   const my = ++loadToken;
   error.value = undefined;
   try {
-    const [s, p] = await Promise.all([
+    const [s, summary] = await Promise.all([
       api.get<SubStatus[]>(`/subscriptions?m=${month.value}`),
-      api.get<Payment[]>(`/payments?m=${month.value}`),
+      api.get<{ count: number; collected: number }>(`/payments/summary?m=${month.value}`),
     ]);
     if (my !== loadToken) return; // ignore stale (out-of-order) responses
     subs.value = s;
-    payments.value = p;
-    writeCache(cacheKey(), { subs: s, payments: p });
+    paymentSummary.value = summary;
+    writeCache(cacheKey(), { subs: s, summary });
     loaded = true;
   } catch (e) {
     if (my !== loadToken) return;
@@ -71,18 +72,22 @@ async function load() {
   }
 }
 function showCached(): boolean {
-  const hit = readCache<{ subs: SubStatus[]; payments: Payment[] }>(cacheKey());
+  const hit = readCache<{ subs: SubStatus[]; summary: { count: number; collected: number } }>(cacheKey());
   if (hit) {
     subs.value = hit.subs;
-    payments.value = hit.payments;
+    paymentSummary.value = hit.summary;
     loaded = true;
+  } else {
+    loaded = false;
+    subs.value = [];
+    paymentSummary.value = { count: 0, collected: 0 };
   }
   return !!hit;
 }
 // On month change/nav: render cache instantly (skeleton only when nothing cached), then revalidate.
 watch(month, () => { loading.value = !showCached(); load(); }, { immediate: true });
 
-const collected = computed(() => payments.value.filter((p) => !p.voidedAt).reduce((s, p) => s + p.amount, 0));
+const collected = computed(() => paymentSummary.value.collected);
 const counts = computed(() => countDues(subs.value));
 
 // One search over the month, labelled as such: it narrows the dues roster and
@@ -103,14 +108,13 @@ const filteredSubs = computed(() => {
   const rows = searchedSubs.value.filter((s) => !want || want.includes(s.state));
   return term.value ? rows : rows.slice().sort(byUrgency); // a search keeps best-match order
 });
-const filteredPayments = computed(() =>
-  fuzzyFilter(payments.value, term.value, (p) => [
-    p.traineeName || payTypeLabel(p.type), p.note, p.reference, payTypeLabel(p.type), p.periodMonth, methodLabel(p.method),
-  ]),
-);
+const {
+  items: payItems, total: payTotal, page: payPage, pageCount: payPages, from: payFrom, to: payTo,
+  loading: payLoading, searching: paySearching, error: payError, reload: reloadPayments,
+} = useServerList<Payment>((s) => `/payments?m=${month.value}${s ? `&q=${encodeURIComponent(s)}` : ""}`, term, 10);
+watch(month, () => { if (payPage.value !== 1) payPage.value = 1; else reloadPayments(); });
 // Destructured (not kept as objects) so the template reads the refs directly.
 const { page: subPage, pageCount: subPages, items: subItems, total: subTotal, from: subFrom, to: subTo } = usePaged(filteredSubs, 8);
-const { page: payPage, pageCount: payPages, items: payItems, total: payTotal, from: payFrom, to: payTo } = usePaged(filteredPayments, 10);
 
 // Chips with counts and what's owed, computed over the searched month. The
 // Partial chip is always there — even for one person — so nobody half-paid
@@ -239,7 +243,7 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
 
       <div class="grid grid-cols-2 gap-1 rounded-xl border border-line bg-elevated p-1" role="tablist" aria-label="Money sections">
         <button
-          v-for="t in [{ v: 'dues', l: `Dues · ${monthLabel(month).split(' ')[0]}` }, { v: 'payments', l: `Payments (${payments.length})` }]"
+          v-for="t in [{ v: 'dues', l: `Dues · ${monthLabel(month).split(' ')[0]}` }, { v: 'payments', l: `Payments (${paymentSummary.count})` }]"
           :key="t.v"
           type="button"
           role="tab"
@@ -255,7 +259,8 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
           v-model="q"
           label="Search dues and payments this month"
           placeholder="Search dues & payments — name, note, reference…"
-          :matches="tab === 'dues' ? filteredSubs.length : filteredPayments.length"
+          :matches="tab === 'dues' ? filteredSubs.length : payTotal"
+          :searching="tab === 'payments' && paySearching"
         />
         <p class="mt-1 px-1 text-[0.6875rem] text-faint">Searches both dues and payments for {{ monthLabel(month) }}.</p>
       </div>
@@ -326,8 +331,10 @@ const lastPaid = (s: SubStatus) => (s.lastPaymentDate ? `last paid ${formatLongD
           <h2 class="label-eyebrow text-[0.625rem] text-faint">Received in {{ monthLabel(month) }}</h2>
           <button class="inline-flex min-h-10 items-center gap-1 px-1 text-sm font-medium text-bronze hover:underline" @click="exportCsv"><Download class="h-3.5 w-3.5" /> CSV</button>
         </div>
+        <Skeleton v-if="payLoading || paySearching" :rows="4" />
+        <Alert v-else-if="payError">{{ payError }} <button class="underline" @click="reloadPayments">Retry</button></Alert>
         <EmptyState
-          v-if="filteredPayments.length === 0"
+          v-else-if="payTotal === 0"
           :icon="Receipt"
           :title="q ? 'No matching payments' : 'No payments this month'"
           :description="q ? 'Try a different name, note or reference.' : 'Cash you collect will show up here.'"

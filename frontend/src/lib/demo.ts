@@ -411,7 +411,7 @@ function report(month: string): MonthlyReport {
       started: started.length, notMarkedDone: started.filter((x) => x.status === "scheduled").length,
       completionPct: pct(kept.filter((x) => x.status === "completed").length, started.length),
       seriesCreated: seriesDocs.filter((d) => inMonth(d.createdAt, month)).length,
-      series: seriesIds.map((id) => { const p = seriesProgress(id); return { seriesId: id, title: p.title, completed: p.completed, planned: p.planned, inMonth: kept.filter((x) => x.seriesId === id).length }; }),
+      series: seriesIds.map((id) => { const p = seriesProgress(id); return { seriesId: id, occurrenceId: kept.find((x) => x.seriesId === id)?.id ?? "", title: p.title, completed: p.completed, planned: p.planned, inMonth: kept.filter((x) => x.seriesId === id).length }; }),
       plansActive: active.length,
       plansUnknown: 0,
       planCredits: sessions.filter((x) => inMonth(x.start, month) && x.status === "completed").reduce((n, x) => n + x.attendees.filter((a) => a.planId && a.status === "attended").length, 0),
@@ -543,6 +543,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
 
   // /trainees
   if (seg[0] === "trainees") {
+    if (seg[1] === "summary") return r({ active: trainees.filter((t) => !t.archivedAt && t.status === "active").length });
     if (seg.length === 1) {
       if (method === "POST") {
         if (!String(body.name ?? "").trim()) fail(400, "VALIDATION", "name is required", "name");
@@ -551,8 +552,26 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
         return r(t);
       }
       const arch = params.get("archived");
-      const base = trainees.filter((t) => (arch === "include" || arch === "1" ? true : arch === "only" ? !!t.archivedAt : !t.archivedAt));
-      return r(searched(base.sort((a, b) => a.name.localeCompare(b.name)), q, (t) => [t.name, t.phone]));
+        const dueRows = new Map(subscriptions(params.get("m") ?? MONTH).map((s) => [s.trainee.id, s]));
+        const dueFilter = params.get("dues");
+        const sortBy = params.get("sort");
+        const owed = (t: Trainee) => {
+          const s = dueRows.get(t.id);
+          return s && (s.state === "partial" || s.state === "unpaid") ? s.remaining : 0;
+        };
+        const base = trainees.filter((t) => {
+          if (!(arch === "include" || arch === "1" ? true : arch === "only" ? !!t.archivedAt : !t.archivedAt)) return false;
+          if (params.get("status") && params.get("status") !== "all" && t.status !== params.get("status")) return false;
+          if (params.get("skill") && params.get("skill") !== "any" && t.skillLevel !== params.get("skill")) return false;
+          const s = dueRows.get(t.id);
+          if (dueFilter === "owing" && !owed(t)) return false;
+          if (["partial", "unpaid", "paid"].includes(dueFilter ?? "") && s?.state !== dueFilter) return false;
+          return true;
+        });
+        if (sortBy === "recent") base.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        else if (sortBy === "owed") base.sort((a, b) => owed(b) - owed(a) || a.name.localeCompare(b.name));
+        else base.sort((a, b) => a.name.localeCompare(b.name));
+        return r(listOrPage(searched(base, q, (t) => [t.name, t.phone]), params));
     }
     const id = seg[1];
     const t = trainees.find((x) => x.id === id);
@@ -633,7 +652,8 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       const tr = params.get("trainee");
       const plan = params.get("plan");
       const ser = params.get("series");
-      let rows = sessions.filter((s) => (!inPeriod || inPeriod(s.start)) && (!tr || s.attendees.some((a) => a.trainee === tr)) && (!plan || s.attendees.some((a) => a.planId === plan)) && (!ser || s.seriesId === ser));
+      const status = params.get("status");
+      let rows = sessions.filter((s) => (!inPeriod || inPeriod(s.start)) && (!tr || s.attendees.some((a) => a.trainee === tr)) && (!plan || s.attendees.some((a) => a.planId === plan)) && (!ser || s.seriesId === ser) && (!status || s.status === status));
       rows = [...rows].sort((a, b) => (params.get("order") === "desc" ? b.start.localeCompare(a.start) : a.start.localeCompare(b.start)));
       return r(listOrPage(searched(rows, q, (s) => [s.title, s.attendees.map((a) => a.traineeName).join(" "), s.location, s.type]), params));
     }
@@ -675,6 +695,11 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
 
   // /payments
   if (seg[0] === "payments") {
+    if (seg[1] === "summary") {
+      const inPeriod = periodFilter(params);
+      const rows = payments.filter((p) => !inPeriod || inPeriod(p.date));
+      return r({ count: rows.length, collected: rows.filter((p) => !p.voidedAt).reduce((n, p) => n + p.amount, 0) });
+    }
     if (seg.length === 1) {
       if (method === "POST") {
         const amount = Number(body.amount);
@@ -742,7 +767,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
         return r(rem);
       }
       const st = params.get("status");
-      return r(reminders.filter((x) => (!st || (st === "done" ? x.done : !x.done)) && (!params.get("priority") || x.priority === params.get("priority"))));
+        const rows = reminders.filter((x) => (!st || (st === "done" ? x.done : !x.done)) && (!params.get("priority") || x.priority === params.get("priority")))
+          .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+        return r(listOrPage(searched(rows, q, (x) => [x.title, x.relatedLabel]), params));
     }
     const id = seg[1];
     const rem = reminders.find((x) => x.id === id);
@@ -797,6 +824,11 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
 
   // /inventory
   if (seg[0] === "inventory") {
+    if (seg[1] === "summary") return r({
+      active: inventory.filter((i) => i.active).length,
+      archived: inventory.filter((i) => !i.active).length,
+      short: inventory.filter((i) => i.active && !!shortage(i)).length,
+    });
     if (seg.length === 1) {
       if (method === "POST") {
         const it: InventoryItem = { id: genId(), stock: 0, price: 0, active: true, ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -806,7 +838,9 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       }
       const act = params.get("active");
       const st = params.get("stock");
-      return r(inventory.filter((i) => (!act || String(i.active) === act) && (!st || (st === "short" ? !!shortage(i) : shortage(i) === st))));
+        const rows = inventory.filter((i) => (!act || String(i.active) === act) && (!st || (st === "short" ? !!shortage(i) : shortage(i) === st)))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        return r(listOrPage(searched(rows, q, (i) => [i.name, i.sku]), params));
     }
     const id = seg[1];
     const it = inventory.find((x) => x.id === id);

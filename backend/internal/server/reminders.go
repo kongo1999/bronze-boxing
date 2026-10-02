@@ -84,6 +84,9 @@ func (h *reminderHandler) list(c *fiber.Ctx) error {
 		filter["done"] = false
 	case "done":
 		filter["done"] = true
+	case "":
+	default:
+		return badField("status", "status must be open or done")
 	}
 	if p := c.Query("priority"); p != "" {
 		if err := oneOf("priority", p, priorities...); err != nil {
@@ -98,6 +101,13 @@ func (h *reminderHandler) list(c *fiber.Ctx) error {
 		}
 		filter["relatedType"], filter["relatedId"] = rt, oid
 	}
+	if q, ok := searchQuery(c); ok {
+		return rankedFind(c, ctx, h.store, models.CollReminders, kindReminder, filter, q,
+			func(r models.Reminder) primitive.ObjectID { return r.ID })
+	}
+	if c.Query("limit") != "" {
+		return h.pagedReminders(c, ctx, filter)
+	}
 	cur, err := h.store.Coll(models.CollReminders).
 		Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "dueDate", Value: 1}, {Key: "_id", Value: 1}}))
 	if err != nil {
@@ -111,6 +121,43 @@ func (h *reminderHandler) list(c *fiber.Ctx) error {
 		out[i] = withDay(out[i])
 	}
 	return c.JSON(out)
+}
+
+func (h *reminderHandler) pagedReminders(c *fiber.Ctx, ctx context.Context, filter bson.M) error {
+	coll := h.store.Coll(models.CollReminders)
+	limit := min(max(atoiDefault(c.Query("limit"), 20), 1), 200)
+	offset := max(atoiDefault(c.Query("offset"), 0), 0)
+	total, err := coll.CountDocuments(ctx, filter)
+	if err != nil {
+		return err
+	}
+	stages := mongo.Pipeline{{{Key: "$match", Value: filter}}}
+	if c.Query("status") == "done" {
+		stages = append(stages, bson.D{{Key: "$sort", Value: bson.D{{Key: "doneAt", Value: -1}, {Key: "dueDate", Value: -1}, {Key: "_id", Value: -1}}}})
+	} else {
+		effective := bson.M{"$cond": bson.A{bson.M{"$gt": bson.A{"$snoozedUntil", "$dueDay"}}, "$snoozedUntil", "$dueDay"}}
+		rank := bson.M{"$switch": bson.M{"branches": bson.A{
+			bson.M{"case": bson.M{"$eq": bson.A{"$priority", models.PriorityHigh}}, "then": 0},
+			bson.M{"case": bson.M{"$eq": bson.A{"$priority", models.PriorityNormal}}, "then": 1},
+		}, "default": 2}}
+		stages = append(stages,
+			bson.D{{Key: "$addFields", Value: bson.M{"_effectiveDay": effective, "_priorityRank": rank}}},
+			bson.D{{Key: "$sort", Value: bson.D{{Key: "_effectiveDay", Value: 1}, {Key: "_priorityRank", Value: 1}, {Key: "_id", Value: 1}}}},
+		)
+	}
+	stages = append(stages, bson.D{{Key: "$skip", Value: offset}}, bson.D{{Key: "$limit", Value: limit}})
+	cur, err := coll.Aggregate(ctx, stages)
+	if err != nil {
+		return err
+	}
+	items := []models.Reminder{}
+	if err := cur.All(ctx, &items); err != nil {
+		return err
+	}
+	for i := range items {
+		items[i] = withDay(items[i])
+	}
+	return c.JSON(page[models.Reminder]{Items: items, Total: total, HasMore: int64(offset+len(items)) < total, Offset: offset, Limit: limit})
 }
 
 // counts powers the in-app badge: open reminders that are overdue or due

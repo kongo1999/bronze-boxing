@@ -150,3 +150,28 @@ test("item history searches stock actions and a trainee can jump to an older due
   await page.locator('input[type="month"][aria-label="Dues month"]').fill(olderMonth);
   await expect(page.getByText("March 2024")).toBeVisible();
 });
+
+test("trainee history shows sessions and purchases beyond the old cutoffs", async ({ page, request }, info) => {
+  const tag = uniq();
+  const trainee = await addTrainee(request, `Long History ${tag}`, 0);
+  for (let n = 1; n <= 9; n++) {
+    const start = new Date(Date.now() + ((info.project.name === "phone" ? 180 : 250) + n * 2) * 86_400_000).toISOString();
+    const response = await request.post("/api/sessions", { data: {
+      title: `Future Pad ${n} ${tag}`, type: "private", start, durationMin: 45,
+      attendees: [{ trainee: trainee.id }],
+    } });
+    expect(response.ok()).toBeTruthy();
+  }
+  const item = await (await request.post("/api/inventory", { data: { name: `Wrap ${tag}`, price: 5, stock: 12 } })).json();
+  for (let n = 0; n < 11; n++) {
+    const response = await request.post(`/api/inventory/${item.id}/sell`, { data: { qty: 1, trainee: trainee.id } });
+    expect(response.ok()).toBeTruthy();
+  }
+
+  await page.goto(`/trainees/${trainee.id}`);
+  await expect(page.getByText("Coming up · 9")).toBeVisible();
+  await page.getByRole("button", { name: "Next page" }).first().click();
+  await expect(page.getByText(`Future Pad 9 ${tag}`)).toBeVisible();
+  await page.getByRole("button", { name: "Show more (1 left)" }).click();
+  await expect(page.getByRole("heading", { name: "Purchases · 11" })).toBeVisible();
+});
