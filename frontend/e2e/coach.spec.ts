@@ -72,6 +72,8 @@ test("payment promise appears on the member and a cancelled class place goes to 
   await page.getByRole("button", { name: `Cancel ${one.name}` }).click();
   await expect(page.getByRole("button", { name: "Book place" })).toBeVisible();
   await page.getByRole("button", { name: "Book place" }).click();
-  const booked = await (await request.get(`/api/sessions/${s.id}`)).json();
-  expect(booked.attendees.map((a: { trainee: string }) => a.trainee)).toEqual([two.id]);
+  await expect.poll(async () => {
+    const booked = await (await request.get(`/api/sessions/${s.id}`)).json();
+    return booked.attendees.map((a: { trainee: string }) => a.trainee);
+  }).toEqual([two.id]);
 });
