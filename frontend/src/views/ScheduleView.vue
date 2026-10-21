@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, reactive, computed, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { ChevronLeft, ChevronRight, CalendarPlus, Check, CalendarDays, Plus, TriangleAlert } from "lucide-vue-next";
 import { api, errMsg } from "@/lib/api";
-import { readCache, writeCache } from "@/lib/cache";
+import { readCache, writeCache, invalidate } from "@/lib/cache";
 import { toast } from "@/lib/toast";
-import type { Session, SeriesProgress, SessionPlan } from "@/lib/types";
+import type { Session, SeriesProgress, SessionPlan, SeriesDetail } from "@/lib/types";
+import { askReason } from "@/lib/prompt";
 import {
   addDays, browserIsElsewhere, dayOf, dayStartISO, formatDay, formatTime, isDayKey, mondayOf, studioTZ, todayKey,
 } from "@/lib/studio";
@@ -172,6 +173,82 @@ const days = computed(() => {
 });
 const isEmpty = computed(() => days.value.length === 0);
 
+// Bulk selection survives week navigation, so scattered classes can be
+// gathered without opening and editing each one. The backend rechecks all
+// selected IDs before committing an action.
+type SelectedClass = { id: string; title: string; start: string; seriesId?: string };
+const bulkMode = ref(false);
+const selected = ref<Record<string, SelectedClass>>({});
+const selectedRows = computed(() => Object.values(selected.value).sort((a, b) => a.start.localeCompare(b.start)));
+const selectedQ = ref("");
+const shownSelected = computed(() => fuzzyFilter(selectedRows.value, selectedQ.value, (s) => [s.title, formatDay(dayOf(s.start)), s.seriesId]));
+const bulkBusy = ref(false);
+const bulkEditOpen = ref(false);
+const bulkFields = reactive({ title: false, time: false, durationMin: false, location: false, capacity: false, fee: false });
+const bulkForm = reactive({ title: "", time: "18:00", durationMin: 60, location: "", capacity: 0, fee: 0 });
+function selectClass(s: SelectedClass) {
+  if (selected.value[s.id]) delete selected.value[s.id];
+  else if (selectedRows.value.length >= 200) toast("Select at most 200 classes at once.", "error");
+  else selected.value[s.id] = { id: s.id, title: s.title, start: s.start, seriesId: s.seriesId };
+}
+function selectShown() {
+  for (const s of matching.value.filter((s) => s.status === "scheduled")) {
+    if (selected.value[s.id]) continue;
+    if (selectedRows.value.length >= 200) return toast("Select at most 200 classes at once.", "error");
+    selected.value[s.id] = { id: s.id, title: s.title, start: s.start, seriesId: s.seriesId };
+  }
+}
+async function selectSeries(s: Session) {
+  if (!s.seriesId) return;
+  try {
+    const detail = await api.get<SeriesDetail>(`/sessions/series/${s.seriesId}/progress`);
+    const rows = detail.occurrences.filter((o) => o.status === "scheduled");
+    const newRows = rows.filter((o) => !selected.value[o.id]);
+    if (selectedRows.value.length + newRows.length > 200) return toast("This would exceed the 200-class selection limit.", "error");
+    for (const o of rows) selected.value[o.id] = { id: o.id, title: detail.progress.title || s.title, start: o.start, seriesId: s.seriesId };
+    toast(`Selected ${rows.length} unfinished classes in this series.`, "success");
+  } catch (e) { toast(errMsg(e, "Couldn't select the series."), "error"); }
+}
+function stopBulk() {
+  bulkMode.value = false;
+  bulkEditOpen.value = false;
+  selected.value = {};
+  selectedQ.value = "";
+}
+async function bulkEdit() {
+  const ids = selectedRows.value.map((s) => s.id);
+  if (!ids.length || bulkBusy.value) return;
+  const changes: Record<string, unknown> = {};
+  for (const key of Object.keys(bulkFields) as (keyof typeof bulkFields)[]) if (bulkFields[key]) changes[key] = bulkForm[key];
+  if (!Object.keys(changes).length) return toast("Choose at least one field to change.", "error");
+  const reason = await askReason({ title: `Edit ${ids.length} selected classes?`, message: "Only scheduled classes can be changed. All selected classes must pass the checks or none will change.", confirmLabel: "Apply to selected", tone: "primary", suggestions: ["Schedule correction", "Room change"] });
+  if (reason === null) return;
+  bulkBusy.value = true;
+  try {
+    const result = await api.patch<{ changed: number }>("/sessions/bulk", { ids, changes, reason });
+    invalidate("sessions", "dashboard", "trainees");
+    await load();
+    toast(`Updated ${result.changed} classes.`, "success");
+    stopBulk();
+  } catch (e) { toast(errMsg(e, "Couldn't edit selected classes."), "error"); }
+  finally { bulkBusy.value = false; }
+}
+async function bulkDelete() {
+  const ids = selectedRows.value.map((s) => s.id);
+  if (!ids.length || bulkBusy.value) return;
+  const reason = await askReason({ title: `Delete ${ids.length} selected classes?`, message: "Classes with attendance, linked payments, waitlists, cancellations or notes cannot be deleted. If one is protected, none will be deleted. Series counters adjust for deleted classes.", confirmLabel: "Delete selected", tone: "danger", suggestions: ["Created by mistake", "Schedule replaced"] });
+  if (reason === null) return;
+  bulkBusy.value = true;
+  try {
+    const result = await api.post<{ deleted: number }>("/sessions/bulk/delete", { ids, reason });
+    invalidate("sessions", "dashboard", "trainees");
+    await load();
+    toast(`Deleted ${result.deleted} classes.`, "success");
+    stopBulk();
+  } catch (e) { toast(errMsg(e, "Couldn't delete selected classes."), "error"); }
+  finally { bulkBusy.value = false; }
+}
+
 function shift(delta: number) {
   week.value = addDays(weekStart.value, delta * 7);
 }
@@ -224,6 +301,7 @@ async function toggleDone(s: Session) {
   <div class="space-y-4">
     <PageHeader eyebrow="Classes" title="Schedule">
       <template #action>
+        <button :class="btnClasses('ghost', 'sm')" @click="bulkMode ? stopBulk() : (bulkMode = true)">{{ bulkMode ? 'Done selecting' : 'Manage classes' }}</button>
         <RouterLink :to="withBack('/schedule/new', here, { day: newDay })" :class="btnClasses('primary', 'sm')"><CalendarPlus class="h-4 w-4" /> New</RouterLink>
       </template>
     </PageHeader>
@@ -271,6 +349,14 @@ async function toggleDone(s: Session) {
 
     <SearchInput v-model="q" placeholder="Search this week — class, trainee, place…" />
 
+    <div v-if="bulkMode" class="space-y-3 rounded-xl border border-bronze/40 bg-bronze/10 p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2"><div><p class="font-medium">{{ selectedRows.length }} classes selected</p><p class="text-xs text-faint">Select random classes across weeks, or add every unfinished class in a series. Only scheduled classes can be selected.</p></div><div class="flex gap-2"><button :class="btnClasses('ghost', 'sm')" @click="selectShown">Select shown</button><button v-if="selectedRows.length" :class="btnClasses('ghost', 'sm')" @click="selected = {}">Clear</button></div></div>
+      <SearchInput v-if="selectedRows.length >= 8" v-model="selectedQ" label="Search selected classes" placeholder="Find a selected class…" :matches="selectedQ ? shownSelected.length : undefined" />
+      <ul v-if="selectedRows.length" class="max-h-36 space-y-1 overflow-y-auto"><li v-if="selectedQ && !shownSelected.length" class="text-xs text-faint">No selected classes match.</li><li v-for="s in shownSelected" :key="s.id" class="flex items-center justify-between gap-2 rounded-lg bg-surface px-2 py-1 text-xs"><span class="truncate">{{ formatDay(dayOf(s.start)) }} · {{ formatTime(s.start) }} · {{ s.title }}</span><button type="button" class="shrink-0 text-bronze" :aria-label="`Remove ${s.title} from selection`" @click="delete selected[s.id]">Remove</button></li></ul>
+      <div v-if="selectedRows.length" class="flex flex-wrap gap-2"><button :class="btnClasses('ghost', 'sm')" @click="bulkEditOpen = !bulkEditOpen">{{ bulkEditOpen ? 'Hide edit fields' : 'Edit selected' }}</button><button :class="btnClasses('danger', 'sm')" :disabled="bulkBusy" @click="bulkDelete">Delete selected</button></div>
+      <div v-if="bulkEditOpen && selectedRows.length" class="space-y-2 rounded-lg bg-surface p-3 text-sm"><p class="text-xs text-faint">Tick only the fields you want to change in every selected class. Time keeps each class on its current date.</p><label class="flex items-center gap-2"><input v-model="bulkFields.title" type="checkbox" /> Title <input v-model="bulkForm.title" aria-label="New title" :disabled="!bulkFields.title" class="min-w-0 flex-1 rounded-lg border border-line bg-elevated p-2" /></label><label class="flex items-center gap-2"><input v-model="bulkFields.time" type="checkbox" /> Time <input v-model="bulkForm.time" aria-label="New time" :disabled="!bulkFields.time" type="time" class="ml-auto rounded-lg border border-line bg-elevated p-2" /></label><label class="flex items-center gap-2"><input v-model="bulkFields.durationMin" type="checkbox" /> Duration (minutes) <input v-model.number="bulkForm.durationMin" aria-label="New duration in minutes" :disabled="!bulkFields.durationMin" type="number" min="1" class="ml-auto w-24 rounded-lg border border-line bg-elevated p-2" /></label><label class="flex items-center gap-2"><input v-model="bulkFields.location" type="checkbox" /> Location <input v-model="bulkForm.location" aria-label="New location" :disabled="!bulkFields.location" class="min-w-0 flex-1 rounded-lg border border-line bg-elevated p-2" /></label><label class="flex items-center gap-2"><input v-model="bulkFields.capacity" type="checkbox" /> Capacity <input v-model.number="bulkForm.capacity" aria-label="New capacity" :disabled="!bulkFields.capacity" type="number" min="0" class="ml-auto w-24 rounded-lg border border-line bg-elevated p-2" /></label><label class="flex items-center gap-2"><input v-model="bulkFields.fee" type="checkbox" /> Class fee <input v-model.number="bulkForm.fee" aria-label="New class fee" :disabled="!bulkFields.fee" type="number" min="0" step="0.01" class="ml-auto w-24 rounded-lg border border-line bg-elevated p-2" /></label><button :class="btnClasses('primary', 'sm')" :disabled="bulkBusy" @click="bulkEdit">Apply changes to {{ selectedRows.length }} classes</button></div>
+    </div>
+
     <Alert v-if="failed">
       {{ failed }}
       <button class="ml-1 font-medium underline" @click="load">Retry</button>
@@ -305,7 +391,12 @@ async function toggleDone(s: Session) {
             needsAttendance(s) ? 'border-partial/50' : 'border-line',
           ]"
         >
-          <button
+          <button v-if="bulkMode"
+            type="button" class="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-line"
+            :disabled="s.status !== 'scheduled'" :aria-label="selected[s.id] ? `Deselect ${s.title}` : `Select ${s.title}`" :aria-pressed="!!selected[s.id]"
+            @click="selectClass(s)"
+          ><Check class="h-4 w-4" :class="selected[s.id] ? 'text-bronze' : 'text-transparent'" /></button>
+          <button v-else
             class="grid h-10 w-10 shrink-0 place-items-center rounded-full"
             :aria-label="s.status === 'completed' ? 'Mark session not done' : 'Mark session done'"
             :disabled="s.status === 'cancelled'"
@@ -340,6 +431,7 @@ async function toggleDone(s: Session) {
             </div>
             <Badge :tone="s.type === 'group' ? 'bronze' : 'info'">{{ s.type === "group" ? "Group" : "Private" }}</Badge>
           </RouterLink>
+          <button v-if="bulkMode && s.seriesId && s.status === 'scheduled'" type="button" class="shrink-0 rounded-lg border border-line px-2 py-1 text-xs text-bronze" :aria-label="`Select all unfinished classes in ${s.title} series`" @click="selectSeries(s)">Series</button>
         </li>
       </ul>
     </section>

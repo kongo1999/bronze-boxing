@@ -105,6 +105,53 @@ test("a recurring series previews its dates and is created with its planned coun
   expect(progress.completed).toBe(0);
 });
 
+test("bulk manage selects a full series and a scattered class across weeks", async ({ page, request }, info) => {
+  const tag = uniq();
+  const firstDay = dayPlus(info.project.name === "phone" ? 125 : 160);
+  const secondDay = dayPlus(info.project.name === "phone" ? 132 : 167);
+  const weekday = new Date(`${firstDay}T12:00:00Z`).getUTCDay();
+  const seriesTitle = `Bulk PT ${tag}`;
+  const soloTitle = `Extra PT ${tag}`;
+  const made = await (await request.post("/api/sessions/recurring", { data: {
+    title: seriesTitle, type: "private", weekdays: [weekday], time: "09:00", durationMin: 45,
+    fromDay: firstDay, count: 2,
+  } })).json() as { seriesId: string; sessions: { id: string }[] };
+  const solo = await (await request.post("/api/sessions", { data: {
+    title: soloTitle, type: "private", start: `${secondDay}T12:00:00Z`, durationMin: 45,
+  } })).json() as { id: string };
+
+  await page.goto(`/schedule?week=${firstDay}`);
+  await page.getByRole("button", { name: "Manage classes" }).click();
+  await page.getByRole("button", { name: `Select all unfinished classes in ${seriesTitle} series` }).click();
+  await expect(page.getByText("2 classes selected")).toBeVisible();
+  await page.getByRole("button", { name: "Next week" }).click();
+  await page.getByRole("button", { name: `Select ${soloTitle}` }).click();
+  await expect(page.getByText("3 classes selected")).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit selected" }).click();
+  await page.locator("label").filter({ hasText: "Location" }).getByRole("checkbox").check();
+  await page.getByRole("textbox", { name: "New location" }).fill("Upstairs ring");
+  await page.getByRole("button", { name: "Apply changes to 3 classes" }).click();
+  await page.getByRole("button", { name: "Room change" }).click();
+  await page.getByRole("button", { name: "Apply to selected" }).click();
+  await expect(page.getByRole("button", { name: "Manage classes" })).toBeVisible();
+  for (const id of [...made.sessions.map((s) => s.id), solo.id]) {
+    const s = await (await request.get(`/api/sessions/${id}`)).json();
+    expect(s.location).toBe("Upstairs ring");
+  }
+
+  await page.getByRole("button", { name: "Manage classes" }).click();
+  await page.getByRole("button", { name: `Select ${soloTitle}` }).click();
+  await page.getByRole("button", { name: `Select all unfinished classes in ${seriesTitle} series` }).click();
+  await page.getByRole("button", { name: "Delete selected" }).click();
+  await page.getByRole("button", { name: "Created by mistake" }).click();
+  await page.getByRole("button", { name: "Delete selected", exact: true }).last().click();
+  await expect(page.getByRole("button", { name: "Manage classes" })).toBeVisible();
+  const [progress] = await (await request.get(`/api/sessions/series?ids=${made.seriesId}`)).json();
+  expect(progress.planned).toBe(0);
+  for (const id of [...made.sessions.map((s) => s.id), solo.id]) expect((await request.get(`/api/sessions/${id}`)).status()).toBe(404);
+});
+
 test("selling asks for confirmation, moves stock, and gives a receipt", async ({ page, request }) => {
   const name = `Speed Rope ${uniq()}`;
   const item = await (await request.post("/api/inventory", { data: { name, price: 10, stock: 5, lowStockThreshold: 1 } })).json();

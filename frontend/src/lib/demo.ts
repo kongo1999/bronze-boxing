@@ -771,11 +771,14 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   // /sessions
   if (seg[0] === "sessions") {
     if (seg[1] === "recurring") {
-      const occ = occurrences(body.weekdays ?? [], body.time ?? "18:00", body.fromDay, body.toDay ?? body.fromDay);
+      const count = Number(body.count ?? 0);
+      if (count && (!Number.isInteger(count) || count < 1 || count > 200)) fail(400, "VALIDATION", "choose 1 to 200 classes", "count");
+      const occ = occurrences(body.weekdays ?? [], body.time ?? "18:00", body.fromDay, count ? addDays(body.fromDay, 366) : body.toDay ?? body.fromDay).slice(0, count || 200);
+      if (count && occ.length !== count) fail(400, "VALIDATION", "not enough classes fit in one year", "count");
       if (!occ.length) fail(400, "VALIDATION", "none of the chosen weekdays fall between those dates", "weekdays");
       if (seg[2] === "preview") return r({ count: occ.length, conflicts: 0, occurrences: occ.map((s) => ({ start: s, day: studioDay(s) })) });
       const seriesId = genId();
-      seriesDocs.push({ seriesId, title: body.title, type: body.type, weekdays: body.weekdays, time: body.time, fromDay: body.fromDay, toDay: body.toDay, plannedCount: occ.length, status: "active", createdAt: new Date().toISOString() });
+      seriesDocs.push({ seriesId, title: body.title, type: body.type, weekdays: body.weekdays, time: body.time, fromDay: body.fromDay, toDay: count ? studioDay(occ[occ.length - 1]) : body.toDay, plannedCount: occ.length, status: "active", createdAt: new Date().toISOString() });
       const made = occ.map((start) => {
         const s: Session = {
           id: genId(), title: body.title, type: body.type ?? "group", start, durationMin: body.durationMin ?? 60, location: body.location, capacity: body.capacity ?? 0, fee: body.fee ?? 0, seriesId, status: "scheduled",
@@ -786,6 +789,35 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
         return s;
       });
       return r({ seriesId, plannedCount: made.length, created: made.length, sessions: made });
+    }
+    if (seg[1] === "bulk") {
+      needReason(body.reason, "change selected classes");
+      const ids: string[] = body.ids ?? [];
+      if (!ids.length || ids.length > 200 || new Set(ids).size !== ids.length) fail(400, "VALIDATION", "select between 1 and 200 different classes", "ids");
+      const selected = ids.map((id) => sessions.find((s) => s.id === id));
+      if (selected.some((s) => !s || s.status !== "scheduled")) fail(409, "CONFLICT", "selected classes changed; reload and try again");
+      const rows = selected as Session[];
+      if (seg[2] === "delete") {
+        if (rows.some((s) => s.attendees.some((a) => a.status !== "booked") || payments.some((p) => p.sessionId === s.id && !p.voidedAt))) fail(409, "CONFLICT", "a selected class has attendance or linked payments");
+        for (const s of rows) {
+          rm(sessions, s.id);
+          const doc = seriesDocs.find((d) => d.seriesId === s.seriesId);
+          if (doc) doc.plannedCount = Math.max(0, doc.plannedCount - 1);
+          logAudit("session", s.id, "bulk_delete", s, {}, body.reason);
+        }
+        return r({ ok: true, deleted: rows.length });
+      }
+      const ch = body.changes ?? {};
+      if (!Object.keys(ch).length) fail(400, "VALIDATION", "choose a field to change", "changes");
+      if (ch.fee !== undefined && rows.some((s) => payments.some((p) => p.sessionId === s.id && !p.voidedAt))) fail(409, "CONFLICT", "a selected class has linked payments");
+      for (const s of rows) {
+        const before = { ...s };
+        if (ch.time) s.start = studioInstant(studioDay(s.start), ch.time).toISOString();
+        for (const field of ["title", "durationMin", "location", "capacity", "fee"] as const) if (ch[field] !== undefined) (s as unknown as Record<string, unknown>)[field] = ch[field];
+        s.updatedAt = new Date().toISOString();
+        logAudit("session", s.id, "bulk_edit", before, s, body.reason);
+      }
+      return r({ ok: true, changed: rows.length });
     }
     if (seg[1] === "series") {
       if (seg.length === 2) return r((params.get("ids") ?? "").split(",").filter(Boolean).map(seriesProgress));

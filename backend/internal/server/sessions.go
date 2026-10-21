@@ -27,6 +27,8 @@ func registerSessions(r fiber.Router, store *db.Store) {
 	// Static series/recurring routes come before /:id.
 	g.Post("/recurring/preview", h.recurringPreview)
 	g.Post("/recurring", h.recurring)
+	g.Patch("/bulk", h.bulkEdit)
+	g.Post("/bulk/delete", h.bulkDelete)
 	g.Get("/series", h.seriesSummaries)
 	g.Get("/attendance-stats", h.attendanceStats)
 	g.Get("/series/:seriesId/progress", h.seriesProgress)
