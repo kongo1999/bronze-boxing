@@ -299,17 +299,18 @@ async function cancelFuture() {
   }
 }
 const extendTo = ref("");
-async function extend() {
+async function extend(override = false, priorReason?: string) {
   const s = session.value;
   if (!s?.seriesId || !extendTo.value) return;
-  const reason = await askReason({ title: "Extend the series?", confirmLabel: "Extend", tone: "primary", suggestions: ["Renewed"] });
+  const reason = priorReason ?? await askReason({ title: "Extend the series?", confirmLabel: "Extend", tone: "primary", suggestions: ["Renewed"] });
   if (reason === null) return;
   try {
-    const res = await api.post<{ added: number }>(`/sessions/series/${s.seriesId}/extend`, { toDay: extendTo.value, reason });
+    const res = await api.post<{ added: number }>(`/sessions/series/${s.seriesId}/extend`, { toDay: extendTo.value, reason, planOverride: override });
     changed();
     await load();
     toast(`Added ${res.added} class${res.added === 1 ? "" : "es"}.`, "success");
   } catch (e) {
+    if (isApiError(e, "PLAN_FULL") && !override && confirm(e.message)) return extend(true, reason);
     toast(errMsg(e, "Couldn't extend the series."), "error");
   }
 }

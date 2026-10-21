@@ -92,7 +92,7 @@ test("a recurring series previews its dates and is created with its planned coun
   await page.getByRole("switch").click();
   await page.getByRole("button", { name: "Mon", exact: true }).click();
   await page.getByRole("button", { name: "Wed", exact: true }).click();
-  await page.getByRole("button", { name: "4 weeks", exact: true }).click();
+  await page.getByRole("spinbutton", { name: "How many classes?" }).fill("8");
   await expect(page.getByText("8 sessions", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Create 8 sessions" }).click();
   await expect(page).toHaveURL(/\/schedule/);

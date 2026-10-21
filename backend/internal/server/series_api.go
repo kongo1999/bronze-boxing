@@ -31,6 +31,7 @@ type recurringInput struct {
 	Fee          float64         `json:"fee"`
 	FromDay      string          `json:"fromDay"` // studio-local YYYY-MM-DD (preferred)
 	ToDay        string          `json:"toDay"`   // inclusive
+	Count        int             `json:"count"`   // exact occurrence count, alternative to toDay
 	From         *time.Time      `json:"from"`    // legacy: UTC-midnight instants of the days
 	To           *time.Time      `json:"to"`
 	Attendees    []attendeeInput `json:"attendees"`
@@ -40,7 +41,7 @@ type recurringInput struct {
 // spec turns the request into a recurrence, accepting the legacy from/to
 // instants (the old form sent each day's UTC midnight).
 func (in recurringInput) spec() seriesSpec {
-	s := seriesSpec{Weekdays: in.Weekdays, Time: defaultStr(in.Time, "18:00"), FromDay: in.FromDay, ToDay: in.ToDay}
+	s := seriesSpec{Weekdays: in.Weekdays, Time: defaultStr(in.Time, "18:00"), FromDay: in.FromDay, ToDay: in.ToDay, Count: in.Count}
 	if s.FromDay == "" && in.From != nil {
 		s.FromDay = in.From.UTC().Format("2006-01-02")
 	}
@@ -93,6 +94,9 @@ func (h *sessionHandler) draftSeries(ctx context.Context, in recurringInput) (*s
 	}
 	if len(starts) == 0 {
 		return nil, badField("weekdays", "none of the chosen weekdays fall between those dates")
+	}
+	if spec.Count > 0 {
+		spec.ToDay = models.DateKey(starts[len(starts)-1])
 	}
 	attendees, err := h.buildAttendees(ctx, in.Attendees, nil)
 	if err != nil {
@@ -615,8 +619,9 @@ func (h *sessionHandler) seriesExtend(c *fiber.Ctx) error {
 	defer cancel()
 	seriesID := c.Params("seriesId")
 	var in struct {
-		ToDay  string `json:"toDay"`
-		Reason string `json:"reason"`
+		ToDay        string `json:"toDay"`
+		Reason       string `json:"reason"`
+		PlanOverride bool   `json:"planOverride"`
 	}
 	if err := c.BodyParser(&in); err != nil {
 		return badField("body", "invalid body")
@@ -653,6 +658,8 @@ func (h *sessionHandler) seriesExtend(c *fiber.Ctx) error {
 		now := time.Now()
 		var docs []any
 		var clashes []string
+		var newOccurrences []occurrence
+		var copiedAttendees []models.Attendee
 		for _, st := range starts {
 			clash, err := h.findOverlap(tx, last.Type, st, last.DurationMin, nil)
 			if err != nil {
@@ -667,6 +674,8 @@ func (h *sessionHandler) seriesExtend(c *fiber.Ctx) error {
 			for i, a := range last.Attendees {
 				att[i] = models.Attendee{Trainee: a.Trainee, TraineeName: a.TraineeName, Status: models.AttendBooked, PlanID: a.PlanID}
 			}
+			copiedAttendees = att
+			newOccurrences = append(newOccurrences, occurrence{st, last.Type})
 			docs = append(docs, models.Session{
 				ID: primitive.NewObjectID(), Title: last.Title, Type: last.Type, Start: st, DurationMin: last.DurationMin,
 				Location: last.Location, Capacity: last.Capacity, Fee: last.Fee, SeriesID: seriesID,
@@ -676,6 +685,9 @@ func (h *sessionHandler) seriesExtend(c *fiber.Ctx) error {
 		if len(clashes) > 0 {
 			return apiErr(http.StatusConflict, CodeScheduleClash, fmt.Sprintf("%d new occurrence(s) would overlap other bookings", len(clashes))).
 				withDetails(map[string]any{"conflicts": clashes})
+		}
+		if err := h.linkPlans(tx, nil, copiedAttendees, nil, newOccurrences, in.PlanOverride); err != nil {
+			return err
 		}
 		if _, err := h.store.Coll(models.CollSessions).InsertMany(tx, docs); err != nil {
 			return err
