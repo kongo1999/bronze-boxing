@@ -4,7 +4,8 @@
 // receipt is unmistakably invalid — a large VOID mark and the reason.
 import { computed, onMounted, ref } from "vue";
 import { useRoute, RouterLink } from "vue-router";
-import { ChevronLeft, Printer, Share2 } from "lucide-vue-next";
+import { ChevronLeft, Download, Printer, Share2 } from "lucide-vue-next";
+import { downloadElementPdf } from "@/lib/pdf";
 import { api, errMsg } from "@/lib/api";
 import type { Receipt } from "@/lib/types";
 import { money, monthLabel, formatDateTime } from "@/lib/format";
@@ -57,6 +58,12 @@ function asText(): string {
 function printIt() {
   window.print();
 }
+async function savePdf() {
+  const element = document.querySelector<HTMLElement>(".receipt");
+  if (!element || !rc.value) return;
+  try { await downloadElementPdf(element, `payment-receipt-${rc.value.number}.pdf`); }
+  catch (e) { toast(errMsg(e, "Couldn't save the receipt PDF."), "error"); }
+}
 async function share() {
   const text = asText();
   try {
@@ -80,6 +87,7 @@ async function share() {
       </RouterLink>
       <div v-if="rc" class="flex gap-2">
         <button :class="btnClasses('ghost', 'sm')" @click="share"><Share2 class="h-4 w-4" /> Share</button>
+        <button :class="btnClasses('ghost', 'sm')" @click="savePdf"><Download class="h-4 w-4" /> PDF</button>
         <button :class="btnClasses('primary', 'sm')" @click="printIt"><Printer class="h-4 w-4" /> Print</button>
       </div>
     </div>

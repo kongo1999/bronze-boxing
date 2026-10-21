@@ -120,6 +120,13 @@
 }
 
 /* Print (receipts, the monthly report): paper colours, no app chrome. */
+.pdf-light,
+.pdf-light * {
+  background-color: #fff !important;
+  color: #111 !important;
+  border-color: #d3d3d3 !important;
+  box-shadow: none !important;
+}
 @media print {
   body {
     background: #fff !important;
@@ -140,5 +147,12 @@
   .print-sheet {
     background: #fff !important;
     color: #111 !important;
+  }
+  .report,
+  .report * {
+    background-color: #fff !important;
+    color: #111 !important;
+    border-color: #d3d3d3 !important;
+    box-shadow: none !important;
   }
 }

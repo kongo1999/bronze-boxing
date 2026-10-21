@@ -95,6 +95,20 @@ docker compose run --rm migrate          # apply (a no-op when nothing is pendin
 docker compose up -d
 docker compose run --rm migrate -verify  # dues balances and stock ledgers add up
 ```
+The class reminders release adds two index migrations (`2026-10-008-rules` and
+`2026-10-009-class-alerts`); run them before starting the new API image. PDF
+exports run in the browser and need no server configuration.
+
+Automatic WhatsApp reminders are optional and start disabled. Set
+`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, and a supported
+`WHATSAPP_API_VERSION` in the droplet's private `.env`, then restart `api`.
+In **Class alerts**, enter the two approved template names and language, then
+switch to **Automatic**. Both templates need four body parameters in this
+order: member name, class title, date, time. Record a member's WhatsApp opt-in
+on their profile before sending. The worker checks due reminders every minute;
+one delivery record per member and class prevents duplicate automatic sends.
+Failed or interrupted sends stay visible for manual follow-up and are not retried silently.
+The app records API acceptance, not delivery to the recipient's phone.
 If `migrate -dry-run` lists items under **needs review**, they are real-data
 questions (e.g. an old subscription payment with no period) — the migration
 never guesses; fix them in the app afterwards.

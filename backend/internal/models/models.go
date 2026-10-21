@@ -104,6 +104,10 @@ const (
 	CollPolicy        = "studio_policy"
 	CollCancellations = "session_cancellations"
 	CollFollowUps     = "followup_actions"
+	CollRules         = "studio_rules_versions"
+	CollRulesAcks     = "rules_acknowledgements"
+	CollAlertSettings = "class_alert_settings"
+	CollClassAlerts   = "class_alert_deliveries"
 )
 
 // User is a staff login account. The admin account is bootstrapped from
@@ -128,10 +132,11 @@ type AuthSession struct {
 }
 
 type Trainee struct {
-	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Name       string             `bson:"name" json:"name"`
-	Phone      string             `bson:"phone,omitempty" json:"phone,omitempty"`
-	SkillLevel string             `bson:"skillLevel,omitempty" json:"skillLevel,omitempty"`
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Name            string             `bson:"name" json:"name"`
+	Phone           string             `bson:"phone,omitempty" json:"phone,omitempty"`
+	WhatsAppOptInAt *time.Time         `bson:"whatsappOptInAt,omitempty" json:"whatsappOptInAt,omitempty"`
+	SkillLevel      string             `bson:"skillLevel,omitempty" json:"skillLevel,omitempty"`
 	// MonthlyFee and Status summarize the most recently recorded terms — the
 	// fee going forward. Historical dues come from subscription_terms and
 	// subscription_charges, never from these fields.
@@ -521,4 +526,26 @@ type FollowUpAction struct {
 	SnoozedUntil    string     `bson:"snoozedUntil,omitempty" json:"snoozedUntil,omitempty"`
 	LastContactedAt *time.Time `bson:"lastContactedAt,omitempty" json:"lastContactedAt,omitempty"`
 	UpdatedBy       string     `bson:"updatedBy" json:"updatedBy"`
+}
+
+// StudioRules is immutable once published. A new edit creates a version so
+// an acknowledgement always points to the exact wording the client saw.
+type StudioRules struct {
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Version         int                `bson:"version" json:"version"`
+	GroupPolicy     string             `bson:"groupPolicy" json:"groupPolicy"`
+	PrivatePolicy   string             `bson:"privatePolicy" json:"privatePolicy"`
+	ClientAgreement string             `bson:"clientAgreement" json:"clientAgreement"`
+	UpdatedAt       time.Time          `bson:"updatedAt" json:"updatedAt"`
+	UpdatedBy       string             `bson:"updatedBy" json:"updatedBy"`
+}
+
+type RulesAcknowledgement struct {
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Trainee        primitive.ObjectID `bson:"trainee" json:"trainee"`
+	Version        int                `bson:"version" json:"version"`
+	Method         string             `bson:"method" json:"method"` // signed_paper | confirmed_message | verbal
+	Note           string             `bson:"note,omitempty" json:"note,omitempty"`
+	AcknowledgedAt time.Time          `bson:"acknowledgedAt" json:"acknowledgedAt"`
+	RecordedBy     string             `bson:"recordedBy" json:"recordedBy"`
 }

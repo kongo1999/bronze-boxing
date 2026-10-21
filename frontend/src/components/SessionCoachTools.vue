@@ -24,16 +24,23 @@ const waitlist = ref<WaitlistEntry[]>([]); const roster = ref<Trainee[]>([]);
 const payments = ref<Payment[]>([]); const addPick = ref("");
 const policy = reactive<StudioPolicy>({ id: "default", cancelBeforeHours: 12, lateCancellationAction: "allow" });
 const policyOpen = ref(false); const focus = reactive<Record<string, ProgressNote | null>>({});
-const closeQ = ref(""); const waitQ = ref("");
+const closeQ = ref(""); const waitQ = ref(""); const paymentQ = ref("");
 const started = computed(() => new Date(props.session.start).getTime() - 30 * 60_000 <= Date.now());
 const upcoming = computed(() => new Date(props.session.start).getTime() > Date.now());
 const full = computed(() => !!props.session.capacity && props.session.attendees.length >= props.session.capacity);
 const activeWait = computed(() => waitlist.value.filter((x) => ["waiting", "offered"].includes(x.status)));
 const shownAttendees = computed(() => fuzzyFilter(props.session.attendees, closeQ.value, (a) => [a.traineeName, a.status]));
 const shownWait = computed(() => fuzzyFilter(activeWait.value, waitQ.value, (e) => [e.traineeName, e.status]));
+const shownPaymentRoster = computed(() => fuzzyFilter(props.session.attendees, paymentQ.value, (a) => [a.traineeName, a.status, a.planId ? "plan" : "class payment"]));
 const options = computed(() => roster.value.filter((t) => t.status === "active" && !t.archivedAt && !props.session.attendees.some((a) => a.trainee === t.id) && !activeWait.value.some((a) => a.trainee === t.id)).map(traineeOption));
 const ready = computed(() => props.session.attendees.every((a) => status[a.trainee] === "attended" || status[a.trainee] === "no_show"));
 const paidFor = (tid: string) => payments.value.filter((p) => p.trainee === tid && !p.voidedAt).reduce((n, p) => n + p.amount, 0);
+const linkedTotal = computed(() => payments.value.filter((p) => !p.voidedAt).reduce((n, p) => n + p.amount, 0));
+const paidCount = computed(() => props.session.attendees.filter((a) => !a.planId && props.session.fee && Math.round(paidFor(a.trainee) * 100) >= Math.round(props.session.fee * 100)).length);
+const partialCount = computed(() => props.session.attendees.filter((a) => !a.planId && props.session.fee && paidFor(a.trainee) > 0 && Math.round(paidFor(a.trainee) * 100) < Math.round(props.session.fee * 100)).length);
+const planCount = computed(() => props.session.attendees.filter((a) => !!a.planId).length);
+const unpaidCount = computed(() => props.session.attendees.length - paidCount.value - partialCount.value - planCount.value);
+const balanceFor = (tid: string) => Math.max(0, Math.round(((props.session.fee ?? 0) - paidFor(tid)) * 100) / 100);
 const phone = (tid: string) => roster.value.find((t) => t.id === tid)?.phone;
 async function load() {
   Object.keys(status).forEach((k) => delete status[k]);
@@ -88,6 +95,16 @@ async function showFocus(tid: string) {
 <template>
   <div class="space-y-3">
     <p v-if="error" class="rounded-xl border border-overdue/40 p-3 text-xs text-overdue">{{ error }}</p>
+    <Card v-if="session.type === 'group'" class="space-y-3 p-4">
+      <div class="flex items-start justify-between gap-3"><div><h2 class="font-display text-lg font-semibold">Group class payments</h2><p class="text-xs text-muted">Payments linked to this class, by trainee. Monthly subscriptions are tracked in Money separately.</p></div><span class="shrink-0 font-semibold tnum text-paid">{{ money(linkedTotal) }}</span></div>
+      <p v-if="session.fee" class="text-xs text-faint tnum">{{ paidCount }} paid · {{ partialCount }} partial · {{ unpaidCount }} unpaid · {{ planCount }} on plans</p>
+      <SearchInput v-model="paymentQ" label="Search group payments" placeholder="Find a trainee…" :matches="paymentQ ? shownPaymentRoster.length : undefined" />
+      <p v-if="!session.attendees.length" class="text-xs text-faint">Book trainees to track class payments.</p>
+      <ul v-else class="space-y-1"><li v-for="a in shownPaymentRoster" :key="a.trainee" class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line p-2 text-xs">
+        <div><p class="font-medium">{{ a.traineeName }}<span v-if="session.fee" class="ml-2 text-xs" :class="a.planId ? 'text-bronze' : balanceFor(a.trainee) === 0 ? 'text-paid' : paidFor(a.trainee) ? 'text-partial' : 'text-overdue'">{{ a.planId ? 'On plan' : balanceFor(a.trainee) === 0 ? 'Paid' : paidFor(a.trainee) ? 'Partial' : 'Unpaid' }}</span></p><p :class="paidFor(a.trainee) ? 'text-paid' : 'text-faint'">{{ paidFor(a.trainee) ? `${money(paidFor(a.trainee))} linked` : a.planId ? 'On a session plan' : 'No linked class payment' }}<template v-if="session.fee && !a.planId && balanceFor(a.trainee) > 0"> · {{ money(balanceFor(a.trainee)) }} of class fee not recorded</template></p></div>
+        <RouterLink v-if="session.status !== 'cancelled' && !a.planId && (!session.fee || balanceFor(a.trainee) > 0)" :to="withBack('/payments/new', route.fullPath, { trainee: a.trainee, type: 'dropin', amount: String(balanceFor(a.trainee) || session.fee || ''), sessionId: session.id })" class="font-medium text-bronze">Record payment</RouterLink>
+      </li></ul>
+    </Card>
     <Card v-if="started && session.status !== 'cancelled'" class="space-y-3 p-4">
       <div><h2 class="font-display text-lg font-semibold">Class closeout</h2><p class="text-xs text-muted">Mark each person, add a coaching note, then close the class.</p></div>
       <Button v-if="session.attendees.some((a) => status[a.trainee] === '')" size="sm" variant="ghost" @click="allAttended">Mark unreviewed attended</Button>

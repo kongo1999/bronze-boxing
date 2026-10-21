@@ -24,6 +24,7 @@ type seriesSpec struct {
 	Time     string // "HH:MM", studio wall clock
 	FromDay  string // YYYY-MM-DD
 	ToDay    string // YYYY-MM-DD, inclusive
+	Count    int    // optional exact number of occurrences instead of ToDay
 }
 
 // occurrences lists every start instant the spec produces, in order. Each is
@@ -50,21 +51,35 @@ func (s seriesSpec) occurrences() ([]time.Time, error) {
 	if err != nil {
 		return nil, badField("fromDay", "start date must be YYYY-MM-DD")
 	}
-	to, err := models.ParseDay(s.ToDay)
-	if err != nil {
-		return nil, badField("toDay", "end date must be YYYY-MM-DD")
+	if s.Count < 0 || s.Count > maxSeriesOccurrences {
+		return nil, badField("count", fmt.Sprintf("choose between 1 and %d classes", maxSeriesOccurrences))
 	}
-	if to.Before(from) {
-		return nil, badField("toDay", "the end date is before the start date")
-	}
-	if to.Sub(from) > maxSeriesSpanDays*24*time.Hour+2*time.Hour { // +2h absorbs DST
-		return nil, badField("toDay", fmt.Sprintf("a series can span at most %d days", maxSeriesSpanDays))
+	var to time.Time
+	if s.Count > 0 {
+		to = from.AddDate(0, 0, maxSeriesSpanDays)
+	} else {
+		to, err = models.ParseDay(s.ToDay)
+		if err != nil {
+			return nil, badField("toDay", "end date must be YYYY-MM-DD")
+		}
+		if to.Before(from) {
+			return nil, badField("toDay", "the end date is before the start date")
+		}
+		if to.Sub(from) > maxSeriesSpanDays*24*time.Hour+2*time.Hour { // +2h absorbs DST
+			return nil, badField("toDay", fmt.Sprintf("a series can span at most %d days", maxSeriesSpanDays))
+		}
 	}
 	var out []time.Time
 	for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
 		if want[day.Weekday()] {
 			out = append(out, time.Date(day.Year(), day.Month(), day.Day(), hh, mm, 0, 0, time.Local))
+			if s.Count > 0 && len(out) == s.Count {
+				break
+			}
 		}
+	}
+	if s.Count > 0 && len(out) < s.Count {
+		return nil, badField("count", fmt.Sprintf("only %d classes fit within %d days; choose more weekdays or fewer classes", len(out), maxSeriesSpanDays))
 	}
 	if len(out) > maxSeriesOccurrences {
 		return nil, badField("toDay", fmt.Sprintf("that would create %d sessions — a series is limited to %d", len(out), maxSeriesOccurrences))

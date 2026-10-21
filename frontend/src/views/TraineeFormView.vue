@@ -20,6 +20,7 @@ const editing = !!id;
 const form = reactive({
   name: !editing && typeof route.query.name === "string" ? route.query.name : "",
   phone: !editing && typeof route.query.phone === "string" ? route.query.phone : "",
+  whatsappOptIn: false,
   skillLevel: "",
   monthlyFee: 0,
   status: "active",
@@ -49,6 +50,7 @@ onMounted(async () => {
     Object.assign(form, {
       name: t.name ?? "",
       phone: t.phone ?? "",
+      whatsappOptIn: !!t.whatsappOptInAt,
       skillLevel: t.skillLevel ?? "",
       monthlyFee: t.monthlyFee ?? 0,
       status: t.status === "inactive" ? "inactive" : "active",
@@ -135,6 +137,7 @@ async function submit(confirmSameDay = false) {
         <span class="mb-1 block text-xs text-faint">Phone</span>
         <input v-model="form.phone" type="tel" inputmode="tel" :class="inputCls" placeholder="03 000 000" />
       </label>
+      <label class="flex items-start gap-2 text-sm"><input v-model="form.whatsappOptIn" type="checkbox" class="mt-1" /><span>Member agreed to receive class reminders on WhatsApp. Only check this after they opt in.</span></label>
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
           <span class="mb-1 block text-xs text-faint">Skill level</span>

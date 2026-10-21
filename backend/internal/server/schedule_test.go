@@ -184,6 +184,39 @@ func TestSeriesAndPlanCountersReachNineOfTwelve(t *testing.T) {
 	}
 }
 
+func TestExactClassCountAndPlanCapacityOnExtension(t *testing.T) {
+	e := newEnv(t)
+	tr := e.addTrainee("Nour", 0)
+	var plan planOut
+	e.ok("POST", "/trainees/"+tr.ID+"/session-plans", map[string]any{
+		"title": "3 private classes", "targetCount": 3, "startDate": "2027-01-01", "sessionType": "private",
+	}, &plan)
+	var created struct {
+		SeriesID     string       `json:"seriesId"`
+		PlannedCount int          `json:"plannedCount"`
+		Sessions     []sessionOut `json:"sessions"`
+	}
+	e.ok("POST", "/sessions/recurring", map[string]any{
+		"title": "PT — Nour", "type": "private", "weekdays": []int{1}, "time": "10:00",
+		"durationMin": 60, "fromDay": "2027-01-04", "count": 3,
+		"attendees": []map[string]any{{"trainee": tr.ID, "planId": plan.ID}},
+	}, &created)
+	if created.PlannedCount != 3 || len(created.Sessions) != 3 || !strings.HasPrefix(created.Sessions[2].Start, "2027-01-18") {
+		t.Fatalf("exact count created %+v", created)
+	}
+	path := "/sessions/series/" + created.SeriesID + "/extend"
+	if status, _ := e.req("POST", path, map[string]any{"toDay": "2027-01-25", "reason": "Renewed"}); status != http.StatusConflict {
+		t.Fatalf("extension past plan target: got HTTP %d, want 409", status)
+	}
+	if got := e.seriesProg(created.SeriesID).Progress; got.Planned != 3 || got.Scheduled != 3 {
+		t.Fatalf("failed extension changed series: %+v", got)
+	}
+	e.ok("POST", path, map[string]any{"toDay": "2027-01-25", "reason": "Renewed", "planOverride": true}, nil)
+	if got := e.seriesProg(created.SeriesID).Progress; got.Planned != 4 || got.Scheduled != 4 {
+		t.Fatalf("overridden extension: %+v", got)
+	}
+}
+
 func TestPlanRulesRefuseMismatchAndOverbooking(t *testing.T) {
 	e := newEnv(t)
 	jad := e.addTrainee("Jad", 0)

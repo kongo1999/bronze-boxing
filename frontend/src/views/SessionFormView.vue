@@ -37,6 +37,8 @@ const loading = ref(isEdit || !!duplicateId);
 const error = ref<string>();
 const conflictDates = ref<string[]>([]);
 const recurring = ref(false);
+const seriesMode = ref<"count" | "date">("count");
+const seriesCount = ref(8);
 const search = ref("");
 
 // A new session opens on the day it was started from (?day=), at ?time= if
@@ -193,7 +195,8 @@ const attendeePayload = () =>
 const recurringBody = () => ({
   title: form.title, type: form.type, weekdays: form.weekdays, time: form.time,
   durationMin: form.durationMin, location: form.location, capacity: form.capacity,
-  fromDay: form.date, toDay: form.endDate || form.date, attendees: attendeePayload(), planOverride: planOverride.value,
+  fromDay: form.date, ...(seriesMode.value === "count" ? { count: seriesCount.value } : { toDay: form.endDate || form.date }),
+  attendees: attendeePayload(), planOverride: planOverride.value,
 });
 
 // ── Recurring preview: every date, with clashes, before anything is saved ──
@@ -206,15 +209,15 @@ const previewing = ref(false);
 let previewTimer: ReturnType<typeof setTimeout> | undefined;
 let previewToken = 0;
 watch(
-  () => [recurring.value, form.title, form.type, form.date, form.endDate, form.time, form.durationMin, form.weekdays.join(","),
+  () => [recurring.value, seriesMode.value, seriesCount.value, form.title, form.type, form.date, form.endDate, form.time, form.durationMin, form.weekdays.join(","),
     form.attendees.join(","), JSON.stringify(attendeePlan), planOverride.value, form.capacity],
   () => {
+    const my = ++previewToken;
     clearTimeout(previewTimer);
     preview.value = undefined;
     previewError.value = undefined;
-    if (isEdit || !recurring.value || !form.date || !form.weekdays.length || !form.title.trim()) return;
+    if (isEdit || !recurring.value || !form.date || !form.weekdays.length || !form.title.trim() || (seriesMode.value === "count" && (!Number.isInteger(seriesCount.value) || seriesCount.value < 1 || seriesCount.value > 200))) return;
     previewTimer = setTimeout(async () => {
-      const my = ++previewToken;
       previewing.value = true;
       try {
         const p = await api.post<RecurringPreview>("/sessions/recurring/preview", recurringBody());
@@ -409,13 +412,18 @@ async function submit(override = false) {
               <button v-for="d in dows" :key="d.v" type="button" :aria-pressed="form.weekdays.includes(d.v)" :class="pill(form.weekdays.includes(d.v))" @click="toggleDay(d.v)">{{ d.l }}</button>
             </div>
           </div>
-          <div>
+          <div class="grid grid-cols-2 gap-1 rounded-xl border border-line bg-elevated p-1" role="radiogroup" aria-label="Series length">
+            <button type="button" role="radio" :aria-checked="seriesMode === 'count'" class="min-h-10 rounded-lg text-sm" :class="seriesMode === 'count' ? 'bg-bronze text-bronze-ink' : 'text-muted'" @click="seriesMode = 'count'">Number of classes</button>
+            <button type="button" role="radio" :aria-checked="seriesMode === 'date'" class="min-h-10 rounded-lg text-sm" :class="seriesMode === 'date' ? 'bg-bronze text-bronze-ink' : 'text-muted'" @click="seriesMode = 'date'">End date</button>
+          </div>
+          <label v-if="seriesMode === 'count'" class="block"><span class="mb-1 block text-xs text-faint">How many classes?</span><input v-model.number="seriesCount" type="number" min="1" max="200" step="1" :aria-invalid="!Number.isInteger(seriesCount) || seriesCount < 1 || seriesCount > 200" inputmode="numeric" :class="inputCls" /><span v-if="!Number.isInteger(seriesCount) || seriesCount < 1 || seriesCount > 200" class="mt-1 block text-xs text-overdue">Enter a whole number from 1 to 200.</span></label>
+          <div v-if="seriesMode === 'date'">
             <span class="mb-1 block text-xs text-faint">For how many weeks</span>
             <div class="flex flex-wrap gap-1.5">
               <button v-for="n in weekPresets" :key="n" type="button" :aria-pressed="activeWeeks === n" :class="pill(activeWeeks === n)" @click="applyWeeks(n)">{{ n }} weeks</button>
             </div>
           </div>
-          <DateWheel v-model="form.endDate" label="End date" placeholder="Select end date" />
+          <DateWheel v-if="seriesMode === 'date'" v-model="form.endDate" label="End date" placeholder="Select end date" />
 
           <!-- Preview: the exact dates, clashes flagged, before saving. -->
           <div v-if="previewing && !preview" class="text-xs text-faint">Checking dates…</div>
@@ -492,6 +500,7 @@ async function submit(override = false) {
             </div>
           </div>
         </div>
+        <p v-if="recurring && form.attendees.some((id) => plansFor(id).length && !attendeePlan[id])" class="mt-2 text-xs text-partial">Choose a student's plan above to count their attended classes toward the package. “No plan” tracks the series only.</p>
       </div>
 
       <Button :disabled="saving || (!isEdit && recurring && !canCreateSeries)" @click="submit()">{{ submitLabel }}</Button>

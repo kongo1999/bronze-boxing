@@ -57,6 +57,7 @@ Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 | GET | `/trainees/summary` | `{active}` for the roster chip. |
 | POST | `/trainees` | Creates the trainee, its first membership term (billing from this month) and this month's charge |
 | GET | `/trainees/:id` | |
+| GET / POST | `/trainees/:id/rules-acknowledgements` | List or record `{version, method, note?}` for the latest published rules. `method` is `signed_paper`, `confirmed_message`, or `verbal`; duplicate acknowledgements are refused. |
 | PUT | `/trainees/:id` | Details edit. A fee/status change appends a term: `termsApplyFrom: "next_month"` (default) or `"this_month"` (re-prices this month's issued charge; needs `termsReason`). A second change on the same day returns `DUPLICATE` with the existing term unless `termsConfirm: true`. |
 | GET | `/trainees/:id/terms` | Effective-dated terms, newest first |
 | POST | `/trainees/:id/terms` | `{effectiveDate, billingFromMonth, monthlyFee, status, reason?, confirm?}` |
@@ -66,6 +67,16 @@ Example: [`fixtures/error-overpayment.json`](fixtures/error-overpayment.json).
 
 `monthlyFee`/`status` on a trainee summarize the latest recorded terms (the
 fee going forward, from `feeFromMonth`). Historical dues never come from them.
+`whatsappOptIn: true/false` on create or update records or revokes WhatsApp
+reminder consent; the response includes `whatsappOptInAt` when consent exists.
+
+### Class communication and rules
+| Method | Path | Notes |
+|---|---|---|
+| GET / PUT | `/studio-rules` | Get latest (or `?version=N`) and publish a new immutable version with `groupPolicy`, `privatePolicy`, `clientAgreement`. |
+| GET / PUT | `/class-alert-settings` | `{settings, providerReady}`. Settings include mode `drafts` or `automatic`, group/private lead hours, approved template names and language. Automatic mode requires server credentials and both templates. |
+| GET | `/class-alerts?days=14` | Upcoming booked members, due times, consent, phone, draft text and delivery status. Maximum 31 days. |
+| POST | `/class-alerts/:session/:trainee/mark-sent` | Records a manually sent reminder once; a failed automatic delivery can be marked sent after manual follow-up. |
 
 ### Dues and payments
 | Method | Path | Notes |
@@ -127,7 +138,9 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 | POST | `/sessions/recurring` | `{title, type, weekdays[0-6], time "HH:MM", durationMin, fromDay, toDay, attendees}` — studio days, inclusive; each occurrence is at the studio wall-clock `time` (stable across DST). Span ≤ 366 days, ≤ 200 occurrences. Every occurrence starts `scheduled`, even if dated in the past. Whole series rejected on any clash (`SCHEDULE_CONFLICT`, details list the dates). Legacy `from`/`to` instants still accepted. Creates a `session_series` document (`plannedCount`) and all occurrences in one transaction; attendees start `booked`. |
 | GET | `/sessions/series?ids=` | Progress per series: `{planned, completed, scheduled, cancelled, attendanceNeeded, inferred, status}` |
 | GET | `/sessions/series/:seriesId/progress` | Progress plus every occurrence `{id, start, status, booked, attendanceNeeded}` |
-| PATCH | `/sessions/series/:seriesId` | `{fromOccurrence, scope: "future", changes{title?, time?, durationMin?, type?, location?, capacity?, status?}, reason}` — changes this and later occurrences, never completed ones; atomic and audited; re-checks clashes |
+| PATCH | `/sessions/series/:seriesId` | `{fromOccurrence, scope: "future", changes{title?, time?, durationMin?, type?, location?, capacity?, fee?, status?}, reason}` — changes scheduled occurrences from this one onward; atomic and audited; re-checks clashes |
+| POST | `/sessions/series/:seriesId/delete` | `{scope: "all"\|"future", fromOccurrence?, reason}` — atomically deletes unused scheduled occurrences; refuses those with attendance, payments, waitlists, cancellations or progress notes; keeps completed/cancelled history and lowers `plannedCount`. |
+| GET | `/sessions/attendance-stats?trainees=id,id` | `{studioCompleted, traineeCompleted: {id: count}}`; a student's count requires completed session plus attended status. Up to 100 trainees per call. |
 | POST | `/sessions/series/:seriesId/extend` | `{toDay, reason}` — adds occurrences on the same pattern; `plannedCount` grows; audited |
 | POST | `/sessions/series/:seriesId/end` | `{fromOccurrence?, reason}` — cancels scheduled occurrences from that one (default: from now); `plannedCount` shrinks; completed classes untouched; audited |
 | GET/PUT/DELETE | `/sessions/:id` | PUT is partial. DELETE is refused once attendance is recorded (cancel instead). |
@@ -150,6 +163,10 @@ paid/unpaid metrics until reconciled), `upcoming` (future month, nothing paid).
 |---|---|---|
 | GET | `/reports/monthly?m=YYYY-MM` | The month (current or past; a future month is `VALIDATION`) in one snapshot read: `financial` (cash by day: trainee payments, shop sales, refunds, income, expenses by category, net, method split, previous month and % change — equal to `/financials`), `subscriptions` (the fee period: billed trainees and total, paid toward the period at any cash date, outstanding, paid/partial/unpaid/waived/unverified counts, partial and unpaid payers), `trainees` (verified active at the report cutoff, `unknownAtMonthEnd` for legacy months before membership history began, joined, went inactive/archived, attended at least once), `sessions` (occurrences, done/scheduled/cancelled, group/private, completion = done ÷ begun, begun-but-not-marked, series with completed/planned and an `occurrenceId` to open the series, plans active from their audited state / `plansUnknown` when past state is unavailable / credits earned / still owed), `attendance` (attended, no-show, unmarked, distinct people, rate = attended ÷ decided, occupancy over capped classes only), `inventory` (units sold and revenue including sales linked to legacy payments, `legacyLinkedSales` count, returns, top items, low/out now — current state, stock at month end from the stock ledger or null before tracking began). `partial: true` while the month is still running. Cash for a linked legacy sale remains counted once as its payment. |
 | GET | `/reports/monthly/export?m=` | The same report as CSV (Section, Metric, Value) |
+
+The SPA offers direct A4 PDF downloads for payment receipts, shop receipts and
+monthly reports. PDF generation uses the same data as these routes and is
+performed in the browser.
 
 ### Coach workflows (October 2026)
 

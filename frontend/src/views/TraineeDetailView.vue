@@ -7,7 +7,7 @@ import {
 import { api, errMsg, isApiError } from "@/lib/api";
 import { useCachedAsync, invalidate } from "@/lib/cache";
 import type { Trainee, Payment, SubStatus, Charge, Session, Sale, SessionPlan, Page } from "@/lib/types";
-import { money, formatLongDate, formatTime, monthKey, monthLabel } from "@/lib/format";
+import { money, formatDateTime, formatLongDate, formatTime, monthKey, monthLabel } from "@/lib/format";
 import { addDays, dayOf, formatDay, todayKey } from "@/lib/studio";
 import { backTarget, withBack } from "@/lib/route-state";
 import { STATE_LABEL, STATE_TONE, collectable, collectLink } from "@/lib/dues";
@@ -24,6 +24,7 @@ import ChipGroup from "@/components/ui/ChipGroup.vue";
 import PlanCard from "@/components/PlanCard.vue";
 import TraineeProgress from "@/components/TraineeProgress.vue";
 import TraineePromises from "@/components/TraineePromises.vue";
+import RulesAcknowledgement from "@/components/RulesAcknowledgement.vue";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { fuzzyFilter } from "@/lib/fuzzy";
@@ -364,6 +365,8 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
           <span v-else class="text-sm text-muted">{{ trainee.phone }}</span>
           <a v-if="whatsapp" :href="whatsapp" target="_blank" rel="noopener" :class="btnClasses('ghost', 'sm')"><MessageCircle class="h-4 w-4 text-paid" /> WhatsApp</a>
         </div>
+        <p v-if="trainee.whatsappOptInAt" class="mt-2 text-xs text-paid">WhatsApp class reminder consent recorded {{ formatDateTime(trainee.whatsappOptInAt) }}</p>
+        <p v-else class="mt-2 text-xs text-faint">No WhatsApp class reminder consent recorded.</p>
         <p v-if="trainee.notes" class="mt-3 rounded-xl bg-elevated px-3 py-2 text-sm text-muted">{{ trainee.notes }}</p>
         <div class="mt-4 flex flex-wrap gap-2">
           <RouterLink :to="withBack('/schedule/new', here, { attendee: id, day: todayKey() })" :class="btnClasses('primary', 'sm')"><CalendarPlus class="h-4 w-4" /> Book session</RouterLink>
@@ -377,6 +380,7 @@ const attendanceLabel = (st?: string) => (st === "attended" ? "Attended" : st ==
 
       <TraineeProgress :trainee="id" />
       <TraineePromises :trainee="id" />
+      <RulesAcknowledgement :trainee="id" />
 
       <!-- Session plans: the trainee's own attended / target counters. -->
       <section class="space-y-2">

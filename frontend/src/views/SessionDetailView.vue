@@ -214,33 +214,45 @@ const shownOccurrences = computed(() =>
 // ── Series ────────────────────────────────────────────────────────────────
 const seriesOpen = ref(false);
 const futureEdit = ref(false);
-const futureForm = reactive({ title: "", time: "", durationMin: 60, location: "" });
-function openFutureEdit() {
+const futureScope = ref<"here" | "all">("here");
+const futureFrom = ref("");
+const futureBase = ref<Session>();
+const futureForm = reactive({ title: "", time: "", durationMin: 60, location: "", capacity: 0, fee: 0 });
+async function openFutureEdit(scope: "here" | "all") {
   const s = session.value;
-  if (!s) return;
-  Object.assign(futureForm, { title: s.title, time: timeOf(s.start), durationMin: s.durationMin, location: s.location ?? "" });
-  futureEdit.value = true;
+  if (!s?.seriesId) return;
+  const first = scope === "all" ? series.value?.occurrences.find((o) => o.status === "scheduled")?.id : s.id;
+  if (!first) return;
+  try {
+    const base = first === s.id ? s : await api.get<Session>(`/sessions/${first}`);
+    futureScope.value = scope; futureFrom.value = first; futureBase.value = base;
+    Object.assign(futureForm, { title: base.title, time: timeOf(base.start), durationMin: base.durationMin, location: base.location ?? "", capacity: base.capacity ?? 0, fee: base.fee ?? 0 });
+    futureEdit.value = true;
+  } catch (e) { toast(errMsg(e, "Couldn't load the series."), "error"); }
 }
 async function saveFuture() {
   const s = session.value;
-  if (!s?.seriesId) return;
+  const base = futureBase.value;
+  if (!s?.seriesId || !base || !futureFrom.value) return;
   const changes: Record<string, unknown> = {};
-  if (futureForm.title.trim() && futureForm.title.trim() !== s.title) changes.title = futureForm.title.trim();
-  if (futureForm.time && futureForm.time !== timeOf(s.start)) changes.time = futureForm.time;
-  if (futureForm.durationMin !== s.durationMin) changes.durationMin = futureForm.durationMin;
-  if (futureForm.location.trim() !== (s.location ?? "")) changes.location = futureForm.location.trim();
+  if (futureForm.title.trim() && futureForm.title.trim() !== base.title) changes.title = futureForm.title.trim();
+  if (futureForm.time && futureForm.time !== timeOf(base.start)) changes.time = futureForm.time;
+  if (futureForm.durationMin !== base.durationMin) changes.durationMin = futureForm.durationMin;
+  if (futureForm.location.trim() !== (base.location ?? "")) changes.location = futureForm.location.trim();
+  if (futureForm.capacity !== (base.capacity ?? 0)) changes.capacity = futureForm.capacity;
+  if (futureForm.fee !== (base.fee ?? 0)) changes.fee = futureForm.fee;
   if (!Object.keys(changes).length) return (futureEdit.value = false);
   const reason = await askReason({
-    title: "Change this and every later class?",
+    title: futureScope.value === "all" ? "Change all unfinished classes in this series?" : "Change this and every later class?",
     message: "Classes already completed keep their time and attendance.",
-    confirmLabel: "Apply to future",
+    confirmLabel: "Apply changes",
     tone: "primary",
     suggestions: ["New time", "Room change"],
   });
   if (reason === null) return;
   try {
     const res = await api.patch<{ changed: number }>(`/sessions/series/${s.seriesId}`, {
-      scope: "future", fromOccurrence: s.id, changes, reason,
+      scope: "future", fromOccurrence: futureFrom.value, changes, reason,
     });
     futureEdit.value = false;
     changed();
@@ -249,6 +261,23 @@ async function saveFuture() {
   } catch (e) {
     toast(errMsg(e, "Couldn't change the series."), "error");
   }
+}
+async function deleteSeries(scope: "all" | "future") {
+  const s = session.value;
+  if (!s?.seriesId) return;
+  const reason = await askReason({
+    title: scope === "all" ? "Delete all unused classes in this series?" : "Delete unused classes from this date onward?",
+    message: "Scheduled classes with recorded attendance, linked payments, waitlists or coach notes are protected. Completed and cancelled classes remain in history. The whole operation stops if any selected class is protected.",
+    confirmLabel: "Delete unused classes", tone: "danger", suggestions: ["Created by mistake", "Schedule replaced"],
+  });
+  if (reason === null) return;
+  try {
+    const res = await api.post<{ deleted: number; retained: number }>(`/sessions/series/${s.seriesId}/delete`, { scope, fromOccurrence: scope === "future" ? s.id : undefined, reason });
+    changed();
+    if (scope === "all" || s.status === "scheduled") await router.push(back.value);
+    else await load();
+    toast(`Deleted ${res.deleted} unused class${res.deleted === 1 ? "" : "es"}; ${res.retained} kept in history.`, "success");
+  } catch (e) { toast(errMsg(e, "Couldn't delete series classes."), "error"); }
 }
 async function cancelFuture() {
   const s = session.value;
@@ -270,17 +299,18 @@ async function cancelFuture() {
   }
 }
 const extendTo = ref("");
-async function extend() {
+async function extend(override = false, priorReason?: string) {
   const s = session.value;
   if (!s?.seriesId || !extendTo.value) return;
-  const reason = await askReason({ title: "Extend the series?", confirmLabel: "Extend", tone: "primary", suggestions: ["Renewed"] });
+  const reason = priorReason ?? await askReason({ title: "Extend the series?", confirmLabel: "Extend", tone: "primary", suggestions: ["Renewed"] });
   if (reason === null) return;
   try {
-    const res = await api.post<{ added: number }>(`/sessions/series/${s.seriesId}/extend`, { toDay: extendTo.value, reason });
+    const res = await api.post<{ added: number }>(`/sessions/series/${s.seriesId}/extend`, { toDay: extendTo.value, reason, planOverride: override });
     changed();
     await load();
     toast(`Added ${res.added} class${res.added === 1 ? "" : "es"}.`, "success");
   } catch (e) {
+    if (isApiError(e, "PLAN_FULL") && !override && confirm(e.message)) return extend(true, reason);
     toast(errMsg(e, "Couldn't extend the series."), "error");
   }
 }
@@ -495,8 +525,9 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
             </RouterLink>
           </li>
         </ul>
-        <div v-if="session.status !== 'completed'" class="flex flex-wrap gap-2 border-t border-line pt-3">
-          <button :class="btnClasses('ghost', 'sm')" @click="openFutureEdit">Change this & future</button>
+        <div v-if="series.progress.scheduled" class="flex flex-wrap gap-2 border-t border-line pt-3">
+          <button v-if="session.status !== 'completed'" :class="btnClasses('ghost', 'sm')" @click="openFutureEdit('here')">Change this & future</button>
+          <button :class="btnClasses('ghost', 'sm')" @click="openFutureEdit('all')">Change all unfinished</button>
           <button :class="btnClasses('ghost', 'sm')" @click="cancelFuture">End series here</button>
         </div>
         <div v-if="futureEdit" class="space-y-2 rounded-xl bg-elevated p-3">
@@ -506,12 +537,14 @@ const statusButtons: { v: AttendanceStatus; l: string }[] = [
             <label class="block"><span class="mb-1 block text-xs text-faint">Minutes</span><input v-model.number="futureForm.durationMin" type="number" min="1" :class="inputCls" /></label>
           </div>
           <label class="block"><span class="mb-1 block text-xs text-faint">Location</span><input v-model="futureForm.location" :class="inputCls" /></label>
-          <p class="text-xs text-faint">Applies from {{ formatLongDate(session.start) }} on; completed classes keep their time and attendance.</p>
+          <div class="grid grid-cols-2 gap-2"><label class="block"><span class="mb-1 block text-xs text-faint">Capacity (0 = no limit)</span><input v-model.number="futureForm.capacity" type="number" min="0" :class="inputCls" /></label><label class="block"><span class="mb-1 block text-xs text-faint">Class fee</span><input v-model.number="futureForm.fee" type="number" min="0" step="0.01" :class="inputCls" /></label></div>
+          <p class="text-xs text-faint">Applies from {{ futureBase ? formatLongDate(futureBase.start) : '' }} on; completed classes keep their time and attendance.</p>
           <div class="flex gap-2">
-            <Button size="sm" @click="saveFuture">Apply to future</Button>
+            <Button size="sm" @click="saveFuture">Apply changes</Button>
             <Button size="sm" variant="ghost" @click="futureEdit = false">Cancel</Button>
           </div>
         </div>
+        <details v-if="series.progress.scheduled" class="border-t border-line pt-3 text-xs"><summary class="cursor-pointer font-medium text-overdue">Delete unused series classes</summary><p class="mt-2 text-faint">Only scheduled classes with no recorded attendance, linked payments, waitlists, cancellations or progress notes can be deleted.</p><div class="mt-2 flex flex-wrap gap-2"><button :class="btnClasses('danger', 'sm')" @click="deleteSeries('all')">Delete all unused</button><button :class="btnClasses('ghost', 'sm')" @click="deleteSeries('future')">Delete from this class</button></div></details>
         <div class="flex flex-wrap items-end gap-2 border-t border-line pt-3">
           <label class="block"><span class="mb-1 block text-xs text-faint">Extend until</span><input v-model="extendTo" type="date" :min="lastSeriesDay" :class="inputCls" /></label>
           <Button size="sm" variant="ghost" :disabled="!extendTo" @click="extend">Extend</Button>
