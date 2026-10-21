@@ -398,13 +398,14 @@ func inferSeries(seriesID string, occ []models.Session, now time.Time) models.Se
 }
 
 type seriesChanges struct {
-	Title       *string `json:"title"`
-	Time        *string `json:"time"` // "HH:MM" studio wall clock
-	DurationMin *int    `json:"durationMin"`
-	Location    *string `json:"location"`
-	Capacity    *int    `json:"capacity"`
-	Type        *string `json:"type"`
-	Status      *string `json:"status"` // "cancelled" or back to "scheduled"
+	Title       *string  `json:"title"`
+	Time        *string  `json:"time"` // "HH:MM" studio wall clock
+	DurationMin *int     `json:"durationMin"`
+	Location    *string  `json:"location"`
+	Capacity    *int     `json:"capacity"`
+	Fee         *float64 `json:"fee"`
+	Type        *string  `json:"type"`
+	Status      *string  `json:"status"` // "cancelled" or back to "scheduled"
 }
 
 type seriesEditInput struct {
@@ -430,7 +431,7 @@ func (h *sessionHandler) seriesTargets(ctx context.Context, seriesID, fromHex st
 		return nil, badField("fromOccurrence", "that session isn't part of this series")
 	}
 	cur, err := h.store.Coll(models.CollSessions).Find(ctx, bson.M{
-		"seriesId": seriesID, "start": bson.M{"$gte": from.Start}, "status": bson.M{"$ne": models.SessCompleted},
+		"seriesId": seriesID, "start": bson.M{"$gte": from.Start}, "status": models.SessScheduled,
 	}, options.Find().SetSort(bson.D{{Key: "start", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -455,6 +456,11 @@ func validateSeriesChanges(ch seriesChanges) (hh, mm int, err error) {
 	}
 	if ch.Capacity != nil && *ch.Capacity < 0 {
 		return 0, 0, badField("changes.capacity", "capacity can't be negative (0 means unlimited)")
+	}
+	if ch.Fee != nil {
+		if _, err := validMoney("changes.fee", *ch.Fee, true); err != nil {
+			return 0, 0, err
+		}
 	}
 	if ch.Type != nil {
 		if err := oneOf("changes.type", *ch.Type, sessionTypes...); err != nil {
@@ -535,6 +541,9 @@ func (h *sessionHandler) seriesEdit(c *fiber.Ctx) error {
 			if ch.Capacity != nil {
 				s.Capacity = *ch.Capacity
 			}
+			if ch.Fee != nil {
+				s.Fee = round2(*ch.Fee)
+			}
 			if ch.Type != nil {
 				s.Type = *ch.Type
 			}
@@ -554,12 +563,12 @@ func (h *sessionHandler) seriesEdit(c *fiber.Ctx) error {
 				}
 			}
 			if s.Title == before.Title && s.Start.Equal(before.Start) && s.DurationMin == before.DurationMin &&
-				s.Location == before.Location && s.Capacity == before.Capacity && s.Type == before.Type && s.Status == before.Status {
+				s.Location == before.Location && s.Capacity == before.Capacity && s.Fee == before.Fee && s.Type == before.Type && s.Status == before.Status {
 				continue
 			}
 			if _, err := h.store.Coll(models.CollSessions).UpdateOne(tx, bson.M{"_id": s.ID}, bson.M{"$set": bson.M{
 				"title": s.Title, "start": s.Start, "durationMin": s.DurationMin, "location": s.Location,
-				"capacity": s.Capacity, "type": s.Type, "status": s.Status, "updatedAt": time.Now(),
+				"capacity": s.Capacity, "fee": s.Fee, "type": s.Type, "status": s.Status, "updatedAt": time.Now(),
 			}}); err != nil {
 				return err
 			}
@@ -748,4 +757,115 @@ func (h *sessionHandler) seriesEnd(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"ok": true, "cancelled": ended})
+}
+
+// seriesDelete removes unused scheduled occurrences in one transaction. It
+// leaves completed/cancelled classes and every record with money, attendance,
+// waitlist, cancellation or progress history intact. The explicit reduction
+// adjusts the series denominator so the remaining completed/planned counter
+// stays meaningful.
+func (h *sessionHandler) seriesDelete(c *fiber.Ctx) error {
+	ctx, cancel := reqCtx()
+	defer cancel()
+	seriesID := c.Params("seriesId")
+	var in struct {
+		Scope          string `json:"scope"` // all | future
+		FromOccurrence string `json:"fromOccurrence"`
+		Reason         string `json:"reason"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return badField("body", "invalid body")
+	}
+	if err := oneOf("scope", in.Scope, "all", "future"); err != nil {
+		return err
+	}
+	reason, err := requireReason(in.Reason, "delete series occurrences")
+	if err != nil {
+		return err
+	}
+	var deleted, retained, planned int
+	err = h.store.WithTx(ctx, func(tx context.Context) error {
+		series, err := h.seriesRecord(tx, seriesID)
+		if err != nil {
+			return err
+		}
+		_, grouped, err := seriesProgressFor(tx, h.store, []string{seriesID})
+		if err != nil {
+			return err
+		}
+		all := grouped[seriesID]
+		var from time.Time
+		if in.Scope == "future" {
+			if in.FromOccurrence == "" {
+				return badField("fromOccurrence", "choose the first class to delete")
+			}
+			id, err := parseOID(in.FromOccurrence, "fromOccurrence")
+			if err != nil {
+				return err
+			}
+			anchor, err := findSession(tx, h.store, id)
+			if err != nil {
+				return err
+			}
+			if anchor.SeriesID != seriesID {
+				return badField("fromOccurrence", "that class is not in this series")
+			}
+			from = anchor.Start
+		}
+		ids := make([]primitive.ObjectID, 0, len(all))
+		for _, s := range all {
+			if s.Status != models.SessScheduled || in.Scope == "future" && s.Start.Before(from) {
+				continue
+			}
+			for _, a := range s.Attendees {
+				if a.Status != models.AttendBooked {
+					return apiErr(http.StatusConflict, CodeConflict, "a selected class has attendance recorded; correct it or keep that class")
+				}
+			}
+			n, err := linkedClassPayments(tx, h.store, s.ID, nil)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				return apiErr(http.StatusConflict, CodeConflict, "a selected class has linked payments; correct or void them before deleting it")
+			}
+			for _, collection := range []string{models.CollWaitlist, models.CollCancellations, models.CollProgress} {
+				n, err := h.store.Coll(collection).CountDocuments(tx, bson.M{"session": s.ID})
+				if err != nil {
+					return err
+				}
+				if n > 0 {
+					return apiErr(http.StatusConflict, CodeConflict, "a selected class has waitlist, cancellation or progress history; cancel it instead")
+				}
+			}
+			ids = append(ids, s.ID)
+		}
+		if len(ids) == 0 {
+			return badField("scope", "there are no unused scheduled classes to delete")
+		}
+		res, err := h.store.Coll(models.CollSessions).DeleteMany(tx, bson.M{"_id": bson.M{"$in": ids}, "seriesId": seriesID, "status": models.SessScheduled})
+		if err != nil {
+			return err
+		}
+		if res.DeletedCount != int64(len(ids)) {
+			return apiErr(http.StatusConflict, CodeConflict, "the series changed while deleting; retry")
+		}
+		deleted, retained = len(ids), len(all)-len(ids)
+		planned = max(0, series.PlannedCount-deleted)
+		status := series.Status
+		if planned == 0 {
+			status = "ended"
+		}
+		if _, err := h.store.Coll(models.CollSeries).UpdateOne(tx, bson.M{"_id": series.ID}, bson.M{"$set": bson.M{"plannedCount": planned, "status": status, "updatedAt": time.Now()}}); err != nil {
+			return err
+		}
+		return writeAudit(tx, h.store, auditLine{Entity: "series", Ref: series.ID, Action: "delete_unused",
+			Before: fiber.Map{"plannedCount": series.PlannedCount},
+			After:  fiber.Map{"plannedCount": planned, "deleted": deleted, "retained": retained, "scope": in.Scope, "fromOccurrence": in.FromOccurrence},
+			Actor:  actorOf(c), Reason: reason})
+	})
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"ok": true, "deleted": deleted, "retained": retained, "planned": planned})
 }

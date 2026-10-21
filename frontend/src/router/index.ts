@@ -24,6 +24,8 @@ const routes = [
   { path: "/reminders", name: "reminders", component: () => import("@/views/RemindersView.vue") },
   { path: "/follow-ups", name: "follow-ups", component: () => import("@/views/FollowUpsView.vue") },
   { path: "/trial-leads", name: "trial-leads", component: () => import("@/views/TrialLeadsView.vue") },
+  { path: "/rules", name: "rules", component: () => import("@/views/RulesView.vue") },
+  { path: "/class-alerts", name: "class-alerts", component: () => import("@/views/ClassAlertsView.vue") },
   { path: "/reminders/new", name: "reminder-new", component: () => import("@/views/ReminderFormView.vue") },
   { path: "/reminders/:id/edit", name: "reminder-edit", component: () => import("@/views/ReminderFormView.vue") },
 

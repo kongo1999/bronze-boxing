@@ -22,9 +22,12 @@ type Config struct {
 	// Quiet disables per-request logging (tests).
 	Quiet bool
 	// Studio identity printed on receipts.
-	StudioName    string
-	StudioAddress string
-	StudioPhone   string
+	StudioName         string
+	StudioAddress      string
+	StudioPhone        string
+	WhatsAppToken      string
+	WhatsAppPhoneID    string
+	WhatsAppAPIVersion string
 }
 
 func Load() Config {
@@ -46,6 +49,9 @@ func Load() Config {
 		StudioName:         env("STUDIO_NAME", "Bronze Boxing Club"),
 		StudioAddress:      env("STUDIO_ADDRESS", ""),
 		StudioPhone:        env("STUDIO_PHONE", ""),
+		WhatsAppToken:      env("WHATSAPP_ACCESS_TOKEN", ""),
+		WhatsAppPhoneID:    env("WHATSAPP_PHONE_NUMBER_ID", ""),
+		WhatsAppAPIVersion: env("WHATSAPP_API_VERSION", "v23.0"),
 	}
 }
 

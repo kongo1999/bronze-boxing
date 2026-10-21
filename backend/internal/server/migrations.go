@@ -26,7 +26,37 @@ func Migrations() []migrate.Migration {
 		{ID: "2026-09-005-closings-returns-indexes", Description: "Indexes for daily cash counts and sale returns", Up: migrateClosingsReturnsIndexes},
 		{ID: "2026-09-006-series-and-plans", Description: "Series records for existing recurring sessions; indexes for series and session plans", Up: migrateSeriesAndPlans},
 		{ID: "2026-10-007-coach-workflows", Description: "Indexes for payment promises, waitlists, progress notes, trial leads and month reviews", Up: migrateCoachWorkflows},
+		{ID: "2026-10-008-rules", Description: "Indexes for versioned studio rules and member acknowledgements", Up: migrateRules},
+		{ID: "2026-10-009-class-alerts", Description: "Unique class reminder deliveries", Up: migrateClassAlerts},
 	}
+}
+
+func migrateClassAlerts(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {
+	res := migrate.Result{}
+	n, err := r.EnsureIndexes(ctx, models.CollClassAlerts, []mongo.IndexModel{
+		idx(bson.D{{Key: "session", Value: 1}, {Key: "trainee", Value: 1}}, true),
+		idx(bson.D{{Key: "sentAt", Value: -1}}, false),
+	})
+	if err != nil {
+		return res, err
+	}
+	res.Add("indexes", n)
+	return res, nil
+}
+
+func migrateRules(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {
+	res := migrate.Result{}
+	for coll, specs := range map[string][]mongo.IndexModel{
+		models.CollRules:     {idx(bson.D{{Key: "version", Value: 1}}, true)},
+		models.CollRulesAcks: {idx(bson.D{{Key: "trainee", Value: 1}, {Key: "version", Value: 1}}, true)},
+	} {
+		n, err := r.EnsureIndexes(ctx, coll, specs)
+		if err != nil {
+			return res, err
+		}
+		res.Add("indexes", n)
+	}
+	return res, nil
 }
 
 func migrateCoachWorkflows(ctx context.Context, r *migrate.Runner) (migrate.Result, error) {

@@ -16,7 +16,7 @@ import { addDays, currentMonth, dayOf as studioDay, monthOf, shiftMonthKey, stud
 import type {
   Trainee, Session, Payment, Reminder, Expense, InventoryItem, Sale, SaleReturn, StockMovement,
   SubStatus, Dashboard, Financials, SearchResponse, SearchHit, SearchKind, Attendee, AuditEntry, LedgerRow,
-  SessionPlan, PlanProgress, SeriesProgress, MonthlyReport, Charge, PaymentPromise, WaitlistEntry, ProgressNote, TrialLead, StudioPolicy, FollowUp, MonthReview,
+  SessionPlan, PlanProgress, SeriesProgress, MonthlyReport, Charge, PaymentPromise, WaitlistEntry, ProgressNote, TrialLead, StudioPolicy, FollowUp, MonthReview, StudioRules, RulesAcknowledgement,
 } from "./types";
 
 // Demo on in production unless explicitly disabled; off in dev unless forced.
@@ -56,6 +56,10 @@ const trainees: Trainee[] = [
   { id: "t8", name: "Omar Zein", phone: "70 565 656", skillLevel: "beginner", monthlyFee: 0, status: "inactive", notes: "On a break.", createdAt: nowISO, updatedAt: nowISO },
 ];
 const tName = (id?: string) => trainees.find((t) => t.id === id)?.name ?? "";
+const rulesVersions: StudioRules[] = [];
+const ruleAcks: RulesAcknowledgement[] = [];
+const classAlertSettings = { mode: "drafts" as "drafts" | "automatic", groupHours: 24, privateHours: 24, groupTemplate: "", privateTemplate: "", templateLanguage: "en" };
+const alertSent = new Map<string, string>();
 
 // ── Plans and series ───────────────────────────────────────────────────────
 type StoredPlan = Omit<SessionPlan, "progress">;
@@ -583,6 +587,33 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   if (coach.handled) return r(coach.value);
 
   if (path === "/health") return r({ status: "ok", db: true, authRequired: false, timezone: "Asia/Beirut", time: nowISO });
+  if (path === "/studio-rules") {
+    if (method === "PUT") {
+      if (!String(body.groupPolicy ?? "").trim() && !String(body.privatePolicy ?? "").trim() && !String(body.clientAgreement ?? "").trim()) fail(400, "VALIDATION", "add at least one policy or agreement section");
+      const current = rulesVersions.at(-1);
+      const doc: StudioRules = { id: genId(), version: (current?.version ?? 0) + 1, groupPolicy: String(body.groupPolicy ?? "").trim(), privatePolicy: String(body.privatePolicy ?? "").trim(), clientAgreement: String(body.clientAgreement ?? "").trim(), updatedAt: new Date().toISOString(), updatedBy: "demo" };
+      rulesVersions.push(doc); return r(doc);
+    }
+    return r(rulesVersions.find((x) => x.version === Number(params.get("version"))) ?? rulesVersions.at(-1) ?? { version: 0, groupPolicy: "", privatePolicy: "", clientAgreement: "" });
+  }
+  if (path === "/class-alert-settings") {
+    if (method === "PUT") {
+      if (body.mode === "automatic") fail(400, "VALIDATION", "automatic reminders need server credentials and approved templates");
+      Object.assign(classAlertSettings, body);
+    }
+    return r({ settings: { ...classAlertSettings }, providerReady: false });
+  }
+  if (path === "/class-alerts") {
+    const days = Number(params.get("days") ?? 14);
+    return r(sessions.filter((s) => s.status === "scheduled" && s.start > new Date().toISOString() && s.start < new Date(Date.now() + days * 86400000).toISOString()).flatMap((s) => s.attendees.filter((a) => a.status === "booked").flatMap((a) => {
+      const t = trainees.find((x) => x.id === a.trainee); if (!t?.phone) return [];
+      const phone = t.phone.replace(/\D/g, "");
+      const international = phone.startsWith("0") ? `961${phone.slice(1)}` : phone.length === 8 ? `961${phone}` : phone;
+      const key = `${s.id}:${t.id}`;
+      return [{ sessionId: s.id, traineeId: t.id, name: t.name, phone: international, optedIn: !!t.whatsappOptInAt, title: s.title, type: s.type, start: s.start, dueAt: new Date(new Date(s.start).getTime() - (s.type === "group" ? classAlertSettings.groupHours : classAlertSettings.privateHours) * 3600000).toISOString(), status: alertSent.has(key) ? "sent" : "unsent", sentAt: alertSent.get(key), text: `Hi ${t.name}, reminder: ${s.title} is on ${new Date(s.start).toLocaleString()}. See you at Bronze Boxing!` }];
+    })));
+  }
+  if (seg[0] === "class-alerts" && seg[3] === "mark-sent") { alertSent.set(`${seg[1]}:${seg[2]}`, new Date().toISOString()); return r({ status: "sent" }); }
   if (path === "/dashboard") return r(dashboard());
   if (path === "/financials") return r(financials(params.get("m") ?? MONTH));
   if (path === "/reports/monthly") {
@@ -603,6 +634,12 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
   }
   if (path === "/subscriptions") return r(subscriptions(params.get("m") ?? MONTH));
   if (path === "/subscription-charges") return r(charges(params.get("trainee") ?? ""));
+  if (path === "/sessions/attendance-stats") {
+    const ids = (params.get("trainees") ?? "").split(",").filter(Boolean);
+    const counts: Record<string, number> = {};
+    for (const id of ids) counts[id] = sessions.filter((s) => s.status === "completed" && s.attendees.some((a) => a.trainee === id && a.status === "attended")).length;
+    return r({ studioCompleted: sessions.filter((s) => s.status === "completed").length, traineeCompleted: counts });
+  }
   if (path === "/ledger") {
     const m = params.get("m") ?? MONTH;
     const kind = params.get("kind") ?? "";
@@ -656,7 +693,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     if (seg.length === 1) {
       if (method === "POST") {
         if (!String(body.name ?? "").trim()) fail(400, "VALIDATION", "name is required", "name");
-        const t: Trainee = { id: genId(), status: "active", monthlyFee: 0, ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        const t: Trainee = { id: genId(), status: "active", monthlyFee: 0, ...body, whatsappOptInAt: body.whatsappOptIn ? new Date().toISOString() : undefined, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
         trainees.push(t);
         return r(t);
       }
@@ -684,6 +721,16 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     }
     const id = seg[1];
     const t = trainees.find((x) => x.id === id);
+    if (seg[2] === "rules-acknowledgements") {
+      if (method === "POST") {
+        const version = rulesVersions.at(-1)?.version;
+        if (!version || body.version !== version) fail(400, "VALIDATION", "review the current published rules");
+        if (ruleAcks.some((x) => x.trainee === id && x.version === version)) fail(409, "CONFLICT", "already acknowledged");
+        const ack: RulesAcknowledgement = { id: genId(), trainee: id, version, method: body.method, note: body.note ?? "", acknowledgedAt: new Date().toISOString(), recordedBy: "demo" };
+        ruleAcks.push(ack); return r(ack);
+      }
+      return r(ruleAcks.filter((x) => x.trainee === id).sort((a, b) => b.version - a.version));
+    }
     if (seg[2] === "session-plans") {
       if (method === "POST") {
         if (!(body.targetCount >= 1)) fail(400, "VALIDATION", "targetCount must be at least 1", "targetCount");
@@ -697,7 +744,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
     if (seg[2] === "terms") return r([]);
     if (seg[2] === "archive" && t) { t.archivedAt = new Date().toISOString(); t.status = "inactive"; logAudit("trainee", id, "archive", {}, t, body.reason ?? ""); return r(t); }
     if (seg[2] === "unarchive" && t) { t.archivedAt = undefined; return r(t); }
-    if (method === "PUT" && t) { const before = { ...t }; Object.assign(t, body, { updatedAt: new Date().toISOString() }); logAudit("trainee", id, "update", before, t); return r(t); }
+    if (method === "PUT" && t) { const before = { ...t }; Object.assign(t, body, { whatsappOptInAt: body.whatsappOptIn === undefined ? t.whatsappOptInAt : body.whatsappOptIn ? t.whatsappOptInAt ?? new Date().toISOString() : undefined, updatedAt: new Date().toISOString() }); logAudit("trainee", id, "update", before, t); return r(t); }
     if (method === "DELETE") { rm(trainees, id); return r({ ok: true }); }
     if (!t) fail(404, "NOT_FOUND", "trainee not found");
     return r(t);
@@ -731,7 +778,7 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
       seriesDocs.push({ seriesId, title: body.title, type: body.type, weekdays: body.weekdays, time: body.time, fromDay: body.fromDay, toDay: body.toDay, plannedCount: occ.length, status: "active", createdAt: new Date().toISOString() });
       const made = occ.map((start) => {
         const s: Session = {
-          id: genId(), title: body.title, type: body.type ?? "group", start, durationMin: body.durationMin ?? 60, location: body.location, capacity: body.capacity ?? 0, seriesId, status: "scheduled",
+          id: genId(), title: body.title, type: body.type ?? "group", start, durationMin: body.durationMin ?? 60, location: body.location, capacity: body.capacity ?? 0, fee: body.fee ?? 0, seriesId, status: "scheduled",
           attendees: (body.attendees ?? []).map((a: { trainee: string; planId?: string }) => ({ trainee: a.trainee, traineeName: tName(a.trainee), status: "booked" as const, planId: a.planId || undefined })),
           createdAt: nowISO, updatedAt: nowISO,
         };
@@ -749,6 +796,28 @@ export function demoResolve<T>(rawPath: string, method: string, bodyStr?: BodyIn
         return r({ progress: seriesProgress(id), series: { seriesId: id, ...doc }, occurrences: occ.map((s) => ({ id: s.id, start: s.start, status: s.status, booked: s.attendees.length, attendanceNeeded: s.status === "completed" && s.attendees.some((a) => a.status === "booked") })) });
       }
       needReason(body.reason, "change a series");
+      const anchor = sessions.find((s) => s.id === body.fromOccurrence && s.seriesId === id);
+      if (body.fromOccurrence && !anchor) fail(400, "VALIDATION", "choose a class in this series");
+      const targets = sessions.filter((s) => s.seriesId === id && s.status === "scheduled" && (!anchor || s.start >= anchor.start));
+      const doc = seriesDocs.find((x) => x.seriesId === id);
+      if (seg[3] === "delete") {
+        const selected = body.scope === "all" ? sessions.filter((s) => s.seriesId === id && s.status === "scheduled") : targets;
+        if (!selected.length) fail(400, "VALIDATION", "there are no unused scheduled classes to delete");
+        if (selected.some((s) => s.attendees.some((a) => a.status !== "booked") || payments.some((p) => p.sessionId === s.id && !p.voidedAt))) fail(409, "CONFLICT", "a selected class has attendance or linked payments");
+        for (const s of selected) rm(sessions, s.id);
+        if (doc) doc.plannedCount = Math.max(0, doc.plannedCount - selected.length);
+        return r({ ok: true, deleted: selected.length, retained: sessions.filter((s) => s.seriesId === id).length, planned: doc?.plannedCount ?? 0 });
+      }
+      if (method === "PATCH") {
+        for (const s of targets) {
+          const ch = body.changes ?? {};
+          if (ch.time) s.start = studioInstant(studioDay(s.start), ch.time).toISOString();
+          for (const field of ["title", "durationMin", "location", "capacity", "fee"] as const) if (ch[field] !== undefined) (s as unknown as Record<string, unknown>)[field] = ch[field];
+          s.updatedAt = new Date().toISOString();
+        }
+        if (doc && body.changes?.title) doc.title = body.changes.title;
+        return r({ ok: true, changed: targets.length });
+      }
       return r({ ok: true, changed: 0 });
     }
     if (seg.length === 1) {

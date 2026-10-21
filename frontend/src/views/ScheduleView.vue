@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, CalendarPlus, Check, CalendarDays, Plus, Tri
 import { api, errMsg } from "@/lib/api";
 import { readCache, writeCache } from "@/lib/cache";
 import { toast } from "@/lib/toast";
-import type { Session, SeriesProgress } from "@/lib/types";
+import type { Session, SeriesProgress, SessionPlan } from "@/lib/types";
 import {
   addDays, browserIsElsewhere, dayOf, dayStartISO, formatDay, formatTime, isDayKey, mondayOf, studioTZ, todayKey,
 } from "@/lib/studio";
@@ -53,6 +53,7 @@ async function load() {
     loadedWeek = weekStart.value;
     writeCache(cacheKey(), res);
     loadSeries(res);
+    loadProgress(res, my);
   } catch (e) {
     if (my !== loadToken) return;
     // Never show a failed load as an empty week: say so, keep a retry.
@@ -64,6 +65,38 @@ async function load() {
 }
 // Series counters ("9/12") for every series visible this week, in one call.
 const series = ref<Record<string, SeriesProgress>>({});
+const studioCompleted = ref<number>();
+const traineeCompleted = ref<Record<string, number>>({});
+const activePlans = ref<SessionPlan[]>([]);
+const studentQ = ref("");
+async function loadProgress(list: Session[], token: number) {
+  const ids = [...new Set(list.flatMap((s) => s.attendees.map((a) => a.trainee)))];
+  try {
+    const chunks = ids.length ? Array.from({ length: Math.ceil(ids.length / 100) }, (_, i) => ids.slice(i * 100, (i + 1) * 100)) : [[]];
+    const [statRows, planRows] = await Promise.all([
+      Promise.all(chunks.map((batch) => api.get<{ studioCompleted: number; traineeCompleted: Record<string, number> }>(`/sessions/attendance-stats?trainees=${batch.join(",")}`))),
+      Promise.all(chunks.filter((batch) => batch.length).map((batch) => api.get<SessionPlan[]>(`/session-plans?trainees=${batch.join(",")}&status=active`))),
+    ]);
+    if (token !== loadToken) return;
+    studioCompleted.value = statRows[0]?.studioCompleted;
+    traineeCompleted.value = Object.assign({}, ...statRows.map((x) => x.traineeCompleted));
+    activePlans.value = planRows.flat();
+  } catch { /* Progress is an extra hint; the schedule remains usable. */ }
+}
+const coachWeekDone = computed(() => sessions.value.filter((s) => s.status === "completed").length);
+const studentWeekVisits = computed(() => sessions.value.reduce((n, s) => n + (s.status === "completed" ? s.attendees.filter((a) => a.status === "attended").length : 0), 0));
+const studentRows = computed(() => {
+  const byID = new Map<string, { id: string; name: string; week: number; total: number; plan?: SessionPlan }>();
+  for (const s of sessions.value) for (const a of s.attendees) {
+    const row: { id: string; name: string; week: number; total: number; plan?: SessionPlan } =
+      byID.get(a.trainee) ?? { id: a.trainee, name: a.traineeName ?? "Member", week: 0, total: traineeCompleted.value[a.trainee] ?? 0 };
+    if (s.status === "completed" && a.status === "attended") row.week++;
+    row.plan ??= activePlans.value.find((p) => p.trainee === a.trainee);
+    byID.set(a.trainee, row);
+  }
+  return fuzzyFilter([...byID.values()].sort((a, b) => a.name.localeCompare(b.name)), studentQ.value, (r) => [r.name, r.plan?.title]);
+});
+const planFor = (id?: string) => activePlans.value.find((p) => p.trainee === id);
 async function loadSeries(list: Session[]) {
   const ids = [...new Set(list.map((s) => s.seriesId).filter(Boolean))] as string[];
   if (!ids.length) return;
@@ -81,9 +114,13 @@ function showCached(): boolean {
   if (hit) {
     sessions.value = hit;
     loadedWeek = weekStart.value;
+    traineeCompleted.value = {};
+    activePlans.value = [];
   } else {
     sessions.value = [];
     loadedWeek = "";
+    traineeCompleted.value = {};
+    activePlans.value = [];
   }
   return !!hit;
 }
@@ -174,6 +211,8 @@ async function toggleDone(s: Session) {
   try {
     await api.put(`/sessions/${s.id}`, { status: next });
     writeCache(cacheKey(), sessions.value);
+    loadProgress(sessions.value, loadToken);
+    if (s.seriesId) loadSeries(sessions.value);
   } catch (e) {
     s.status = prev;
     toast(errMsg(e, "Couldn't update that session."), "error");
@@ -211,6 +250,9 @@ async function toggleDone(s: Session) {
       <button :class="btnClasses('ghost', 'sm')" @click="goToday"><CalendarDays class="h-4 w-4" /> Jump to this week</button>
     </div>
     <p v-if="browserIsElsewhere()" class="px-1 text-xs text-faint">Times shown in studio time ({{ studioTZ() }}).</p>
+
+    <div class="grid grid-cols-3 gap-2 text-center"><div class="rounded-xl border border-line bg-surface p-2"><p class="font-display text-xl font-semibold tnum">{{ coachWeekDone }}</p><p class="text-[0.6875rem] text-faint">Coach classes done this week</p></div><div class="rounded-xl border border-line bg-surface p-2"><p class="font-display text-xl font-semibold tnum">{{ studioCompleted ?? '—' }}</p><p class="text-[0.6875rem] text-faint">Coach classes done overall</p></div><div class="rounded-xl border border-line bg-surface p-2"><p class="font-display text-xl font-semibold tnum">{{ studentWeekVisits }}</p><p class="text-[0.6875rem] text-faint">Student attendances this week</p></div></div>
+    <details v-if="sessions.some((s) => s.attendees.length)" class="rounded-xl border border-line bg-surface p-3"><summary class="cursor-pointer text-sm font-medium text-bronze">Student class totals for this week’s roster</summary><div class="mt-3 space-y-2"><SearchInput v-model="studentQ" label="Search student totals" placeholder="Find a student…" :matches="studentQ ? studentRows.length : undefined" /><p v-if="!studentRows.length" class="text-xs text-faint">No students match.</p><ul class="max-h-72 space-y-1 overflow-y-auto"><li v-for="r in studentRows" :key="r.id" class="flex flex-wrap justify-between gap-1 rounded-lg border border-line p-2 text-xs"><RouterLink :to="withBack(`/trainees/${r.id}`, here)" class="font-medium text-bronze">{{ r.name }}</RouterLink><span class="tnum">{{ r.week }} this week · {{ r.total }} attended overall<template v-if="r.plan"> · {{ r.plan.progress.completed }}/{{ r.plan.progress.target }} in {{ r.plan.title }} ({{ r.plan.progress.remaining }} left)</template></span></li></ul></div></details>
 
     <div class="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" role="radiogroup" aria-label="Show">
       <button
@@ -291,6 +333,7 @@ async function toggleDone(s: Session) {
               <p v-if="s.seriesId && series[s.seriesId]" class="mt-0.5 text-[0.6875rem] text-faint tnum">
                 Series {{ series[s.seriesId].completed }}/{{ series[s.seriesId].planned }} done<template v-if="series[s.seriesId].cancelled"> · {{ series[s.seriesId].cancelled }} cancelled</template>
               </p>
+              <p v-if="s.type === 'private' && s.attendees.length === 1 && planFor(s.attendees[0]?.trainee)" class="mt-0.5 text-[0.6875rem] text-bronze tnum">Student plan {{ planFor(s.attendees[0]?.trainee)!.progress.completed }}/{{ planFor(s.attendees[0]?.trainee)!.progress.target }} done · {{ planFor(s.attendees[0]?.trainee)!.progress.remaining }} left</p>
               <p v-if="needsAttendance(s)" class="mt-0.5 flex items-center gap-1 text-xs font-medium text-partial">
                 <TriangleAlert class="h-3 w-3" /> Attendance needed
               </p>

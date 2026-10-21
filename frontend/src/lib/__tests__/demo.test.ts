@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { demoResolve } from "../demo";
 import { isApiError } from "../api-error";
 import { addDays, currentMonth, mondayOf, shiftMonthKey, todayKey } from "../studio";
-import type { Financials, MonthlyReport, Page, Payment, SearchResponse, SeriesDetail, SessionPlan, SubStatus, PaymentPromise, TrialLead, FollowUp, ProgressNote, MonthReview } from "../types";
+import type { Financials, MonthlyReport, Page, Payment, SearchResponse, SeriesDetail, SessionPlan, SubStatus, PaymentPromise, TrialLead, FollowUp, ProgressNote, MonthReview, StudioRules, RulesAcknowledgement, Session } from "../types";
 
 // The demo answers with the live API's shapes and rules, so a preview can't
 // teach anyone something the real app won't do.
 const get = <T>(p: string) => demoResolve<T>(p, "GET", null);
 const post = <T>(p: string, body: unknown) => demoResolve<T>(p, "POST", JSON.stringify(body));
+const put = <T>(p: string, body: unknown) => demoResolve<T>(p, "PUT", JSON.stringify(body));
 function code(fn: () => unknown): string | undefined {
   try {
     fn();
@@ -98,5 +99,18 @@ describe("demo contract", () => {
     expect(get<ProgressNote[]>("/trainees/t3/progress")[0].nextFocus).toBe("Slip");
     post("/month-review", { month, note: "Checked" });
     expect(get<MonthReview>(`/month-review?m=${month}`).review?.note).toBe("Checked");
+  });
+
+  it("publishes rules, records consent and creates a searchable class draft", () => {
+    const trainee = post<{ id: string }>("/trainees", { name: "Demo reminder", monthlyFee: 0, phone: "03 123 456", whatsappOptIn: true });
+    const rules = put<StudioRules>("/studio-rules", { groupPolicy: "Arrive early", privatePolicy: "Book ahead", clientAgreement: "I agree" });
+    expect(rules.version).toBeGreaterThan(0);
+    post(`/trainees/${trainee.id}/rules-acknowledgements`, { version: rules.version, method: "signed_paper" });
+    expect(get<RulesAcknowledgement[]>(`/trainees/${trainee.id}/rules-acknowledgements`)).toHaveLength(1);
+    const session = post<Session>("/sessions", { title: "Demo reminder class", type: "private", start: new Date(Date.now() + 48 * 3600000).toISOString(), durationMin: 60, attendees: [{ trainee: trainee.id }] });
+    const alert = get<{ sessionId: string; status: string }[]>("/class-alerts").find((x) => x.sessionId === session.id);
+    expect(alert?.status).toBe("unsent");
+    post(`/class-alerts/${session.id}/${trainee.id}/mark-sent`, {});
+    expect(get<{ sessionId: string; status: string }[]>("/class-alerts").find((x) => x.sessionId === session.id)?.status).toBe("sent");
   });
 });

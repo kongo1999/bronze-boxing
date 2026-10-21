@@ -119,6 +119,8 @@ test("selling asks for confirmation, moves stock, and gives a receipt", async ({
 
   await expect(page).toHaveURL(/\/sales\/.+\/receipt/);
   await expect(page.getByRole("article", { name: /Receipt S-/ })).toBeVisible();
+  const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "PDF" }).click()]);
+  expect(pdf.suggestedFilename()).toMatch(/^sale-receipt-S-.+\.pdf$/);
   const after = await (await request.get(`/api/inventory/${item.id}`)).json();
   expect(after.stock).toBe(3);
 });

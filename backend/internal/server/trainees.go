@@ -68,12 +68,13 @@ var (
 )
 
 type traineeInput struct {
-	Name       string  `json:"name"`
-	Phone      string  `json:"phone"`
-	SkillLevel string  `json:"skillLevel"`
-	MonthlyFee float64 `json:"monthlyFee"`
-	Status     string  `json:"status"`
-	Notes      string  `json:"notes"`
+	Name          string  `json:"name"`
+	Phone         string  `json:"phone"`
+	WhatsAppOptIn *bool   `json:"whatsappOptIn"`
+	SkillLevel    string  `json:"skillLevel"`
+	MonthlyFee    float64 `json:"monthlyFee"`
+	Status        string  `json:"status"`
+	Notes         string  `json:"notes"`
 	// When an edit changes the fee or status: does it price this month
 	// ("this_month", adjusting an already-issued charge — needs termsReason)
 	// or start next month ("next_month", the default)?
@@ -280,6 +281,9 @@ func (h *traineeHandler) create(c *fiber.Ctx) error {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	if in.WhatsAppOptIn != nil && *in.WhatsAppOptIn {
+		t.WhatsAppOptInAt = &now
+	}
 	// Joining mid-month owes the month's full fee (no implicit proration):
 	// the first term bills from this month, and this month's charge is
 	// issued with the trainee so it is priced at the fee they joined on.
@@ -294,8 +298,13 @@ func (h *traineeHandler) create(c *fiber.Ctx) error {
 		if _, err := h.store.Coll(models.CollTerms).InsertOne(tx, term); err != nil {
 			return err
 		}
-		_, err := ensureCharge(tx, h.store, t, month)
-		return err
+		if _, err := ensureCharge(tx, h.store, t, month); err != nil {
+			return err
+		}
+		if t.WhatsAppOptInAt != nil {
+			return writeAudit(tx, h.store, auditLine{Entity: "trainee", Ref: t.ID, Action: "whatsapp_opt_in", After: bson.M{"at": now}, Actor: actor})
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -337,8 +346,25 @@ func (h *traineeHandler) update(c *fiber.Ctx) error {
 			"notes":      in.Notes,
 			"updatedAt":  now,
 		}
+		if in.WhatsAppOptIn != nil {
+			if *in.WhatsAppOptIn && prev.WhatsAppOptInAt == nil {
+				set["whatsappOptInAt"] = now
+			}
+			if !*in.WhatsAppOptIn {
+				set["whatsappOptInAt"] = nil
+			}
+		}
 		if _, err := h.store.Coll(models.CollTrainees).UpdateOne(tx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
 			return err
+		}
+		if in.WhatsAppOptIn != nil && *in.WhatsAppOptIn != (prev.WhatsAppOptInAt != nil) {
+			action := "whatsapp_opt_out"
+			if *in.WhatsAppOptIn {
+				action = "whatsapp_opt_in"
+			}
+			if err := writeAudit(tx, h.store, auditLine{Entity: "trainee", Ref: id, Action: action, After: bson.M{"at": now, "consent": *in.WhatsAppOptIn}, Actor: actor}); err != nil {
+				return err
+			}
 		}
 		if !termsChanged {
 			return nil

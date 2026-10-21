@@ -18,6 +18,7 @@ export interface Trainee {
   id: string;
   name: string;
   phone?: string;
+  whatsappOptInAt?: string;
   skillLevel?: "beginner" | "intermediate" | "advanced" | "";
   /** The fee going forward (latest recorded terms). */
   monthlyFee: number;
@@ -127,6 +128,26 @@ export interface Session {
   closedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface StudioRules {
+  id: string;
+  version: number;
+  groupPolicy: string;
+  privatePolicy: string;
+  clientAgreement: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface RulesAcknowledgement {
+  id: string;
+  trainee: string;
+  version: number;
+  method: "signed_paper" | "confirmed_message" | "verbal";
+  note?: string;
+  acknowledgedAt: string;
+  recordedBy: string;
 }
 
 export interface Payment {

@@ -26,6 +26,7 @@ import {
   Menu,
   Search,
   LogOut,
+  ScrollText,
   type LucideIcon,
 } from "lucide-vue-next";
 
@@ -72,6 +73,8 @@ const railItems = computed<NavItem[]>(() => [
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/follow-ups", label: "Follow-ups", icon: MessageCircle },
   { to: "/trial-leads", label: "Trials", icon: ContactRound },
+  { to: "/rules", label: "Rules", icon: ScrollText },
+  { to: "/class-alerts", label: "Class alerts", icon: MessageCircle },
 ]);
 
 // Keep the overdue count current as the coach moves around (throttled).

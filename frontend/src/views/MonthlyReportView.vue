@@ -22,6 +22,7 @@ import Badge from "@/components/ui/Badge.vue";
 import { btnClasses } from "@/components/ui/button";
 import SearchInput from "@/components/ui/SearchInput.vue";
 import { fuzzyFilter } from "@/lib/fuzzy";
+import { downloadElementPdf } from "@/lib/pdf";
 import MonthReview from "@/components/MonthReview.vue";
 
 const route = useRoute();
@@ -93,6 +94,18 @@ async function printIt() {
   await nextTick();
   window.print();
 }
+async function savePdf() {
+  preparePrint();
+  await nextTick();
+  try {
+    const element = document.querySelector<HTMLElement>(".report");
+    if (element) await downloadElementPdf(element, `monthly-report-${month.value}.pdf`, true);
+  } catch (e) {
+    toast(errMsg(e, "Couldn't save the report PDF."), "error");
+  } finally {
+    finishPrint();
+  }
+}
 
 const f = computed(() => rep.value?.financial);
 const s = computed(() => rep.value?.subscriptions);
@@ -130,6 +143,7 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
       <template #action>
         <div class="flex gap-2" data-print-hide>
           <button :class="btnClasses('ghost', 'sm')" :disabled="!rep" @click="exportCSV"><Download class="h-4 w-4" /> CSV</button>
+          <button :class="btnClasses('ghost', 'sm')" :disabled="!rep" @click="savePdf"><Download class="h-4 w-4" /> PDF</button>
           <button :class="btnClasses('primary', 'sm')" :disabled="!rep" @click="printIt"><Printer class="h-4 w-4" /> Print</button>
         </div>
       </template>
@@ -137,7 +151,7 @@ const weekOfMonth = computed(() => mondayOf(`${month.value}-01`));
 
     <div data-print-hide><MonthPicker v-model="month" /></div>
     <MonthReview :month="month" />
-    <h2 class="hidden font-display text-xl font-semibold print:block">{{ monthLabel(month) }}</h2>
+    <h2 class="font-display text-xl font-semibold">{{ monthLabel(month) }}</h2>
 
     <Skeleton v-if="loading" :rows="6" />
     <Alert v-else-if="error">

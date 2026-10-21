@@ -91,6 +91,9 @@ func main() {
 	}
 
 	app := server.New(cfg, store)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	defer stopWorker()
+	go server.StartClassAlertWorker(workerCtx, store, cfg)
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		if err := server.WarmSearch(ctx, store); err != nil {
@@ -113,6 +116,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("shutting down...")
+	stopWorker()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
