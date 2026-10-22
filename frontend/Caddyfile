@@ -2,6 +2,12 @@
 #   - a domain (e.g. studio.example.com) → Caddy gets a Let's Encrypt cert automatically
 #   - :80                                → plain HTTP on the droplet's IP (first boot / no domain)
 # Set via the SITE_ADDRESS env var (see .env). Defaults to :80.
+
+# Optional extra sites that share this droplet's ports 80/443 (one block per
+# hostname, each proxying to its own container). Matches nothing unless a
+# docker-compose.override.yml mounts files here — see DEPLOY.md "Hosting another site".
+import /etc/caddy/sites.d/*.caddy
+
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
 

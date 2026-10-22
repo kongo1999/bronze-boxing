@@ -251,3 +251,30 @@ For a real studio, skip this and enter data through the UI.
 - **Validate compose before launch** → `docker compose config` prints the resolved config (run on the droplet).
 - **"UNENCRYPTED" in `docker compose logs backup`** → set `BACKUP_PASSPHRASE` in `.env`, then `docker compose up -d backup`.
 - **Backup "FAILED"** → `docker compose logs backup`; usually Mongo unhealthy or wrong `MONGO_USER`/`MONGO_PASSWORD`.
+
+## Hosting another site on the same droplet
+The `web` container owns ports 80/443, so a second site is reached by its own
+hostname through this Caddy (routing is by `Host`; each hostname only matches
+its own block, and unknown hosts get nothing). The other site runs as an
+independent compose project with no published ports, e.g. `/root/sigma-site`.
+
+Droplet-only wiring (not in git, so local dev is unaffected):
+1. `docker network create edge` (once; the other project joins it too).
+2. `/root/edge/sites.d/<name>.caddy`, one block per site:
+   `sigmaredhat.duckdns.org { reverse_proxy sigma-site:80 }`
+3. `/root/bronze-boxing/docker-compose.override.yml` (auto-loaded by `docker compose`):
+   ```yaml
+   services:
+     web:
+       networks: [internal, edge]
+       volumes:
+         - /root/edge/sites.d:/etc/caddy/sites.d:ro
+   networks:
+     edge:
+       external: true
+   ```
+4. Point the hostname's DNS at the droplet, then `docker compose up -d web`.
+
+Reload after editing a site file without a rebuild:
+`docker compose exec web caddy reload --config /etc/caddy/Caddyfile`
+Rolling back: delete the override file and `docker compose up -d web`.
